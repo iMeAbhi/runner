@@ -1,129 +1,66 @@
-# ✈️ Voyage — Travel Log & Leave Optimizer PWA
+# Travel Log & Leave Optimizer
 
-An offline-first, installable Progressive Web App to track your travels and
-squeeze the most holiday out of every company leave. The frontend is a fully
-immersive **"Liquid Material"** SPA; the backend is **entirely serverless** —
-a single Google Sheet you own, driven by a secure Google Apps Script endpoint.
+An offline-first personal **Travel Tracker + Leave Optimizer** PWA.
+Frontend: React + Vite + Tailwind + Framer Motion. Backend: a single Google
+Sheet exposed through a Google Apps Script web app. No Node server, no CSS
+preprocessors.
 
-> No accounts. No third-party servers. Your data lives in **your** browser and
-> **your** Google Drive.
-
----
-
-## ✨ Features
-
-- **Timeline Feed** — vertical timeline of past / active / upcoming trips as
-  interactive image-backed City Cards. Tap to open a full-screen deep dive with
-  a Drive-linked photo gallery and a "Fun Insights" box. A nudge banner appears
-  when it's been **> 90 days** since your last trip and deep-links into Google
-  Flights with an optimized window pre-filled.
-- **Leave Optimizer** — a sliding-window engine scans 52 weeks to find trip
-  blocks that maximise consecutive days off for the **fewest** company leaves.
-  Live leave balances + annual time-off %.
-- **Insights Dashboard** — morphing time filters (1M → 1Y → custom range),
-  volumetric counts (cities, countries, flights, trains, stays), longest trip,
-  most-visited hub, and an **India coverage** wheel across all 36 states & UTs.
-- **Settings** — one-field backend connection, corporate holiday paste (overrides
-  the default calendar), leave allocation, 4 theme profiles, JSON/CSV export.
-- **Offline-first** — every action writes to IndexedDB instantly; a background
-  worker syncs to your Sheet when the network returns. Installable PWA.
-
-## 🎨 Themes
-
-| Theme | Vibe |
-|-------|------|
-| **AMOLED Dark** | Pitch black + neon glow |
-| **Clean Light** | Frosted milk glass on warm pastel |
-| **Material Mood** | Accent-driven dynamic palette (Aviation / Nomad / Sunset / Violet) |
-| **Sky Dynamic** | Time-of-day fluid gradient (morning → night) |
-
----
-
-## 🧱 Tech Stack
-
-React 18 · Vite 5 · Tailwind CSS 3 · Framer Motion · Dexie (IndexedDB) ·
-browser-image-compression · vite-plugin-pwa · Google Apps Script.
-
----
-
-## 🚀 Getting Started (Frontend)
-
-> Requires **Node.js 18+**. If `node` isn't installed, grab it from
-> <https://nodejs.org> (LTS) or `winget install OpenJS.NodeJS.LTS`.
+## Quick start
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # local dev server
 npm run build      # production build → dist/
-npm run preview    # preview the production build
+npm run preview    # serve the built PWA
 ```
 
----
+## Backend setup (one time)
 
-## 🔌 Backend Setup (Google Apps Script + Sheet) — no token, just a URL
+1. Create a Google Sheet. Copy its ID from the URL.
+2. **Extensions → Apps Script**, paste [`Code.gs`](Code.gs), set `SPREADSHEET_ID`
+   (or leave blank to bind to the container sheet).
+3. Run `setup()` once and approve the Drive + Sheets scopes. It creates the
+   `Trips` and `Holidays` tabs with headers.
+4. **Deploy → New deployment → Web app** — *Execute as: Me*, *Access: Anyone*.
+   Copy the `/exec` URL.
+5. Open the PWA → **Settings** → paste the URL into **Apps Script URL** and set
+   your **Home location**. Tap **Test & sync now**.
 
-1. **Create a Google Sheet** (any name). It auto-creates a `Trips` tab on first use.
-2. **Extensions → Apps Script.** Delete the stub and paste
-   [`gas/Code.gs`](gas/Code.gs).
-   > ⚠️ Don't click Run on `doGet`/`doPost` — those only work over HTTP and will
-   > throw `Cannot read properties of undefined (reading 'parameter')` if run
-   > from the editor. (Optionally run `setup` once to create the tab + approve
-   > permissions early.)
-3. **Deploy → New deployment → Web app:**
-   - *Execute as:* **Me**
-   - *Who has access:* **Anyone**
-4. Copy the **`/exec` URL**. Test it in a browser:
-   `…/exec?action=ping` → should return
-   `{"ok":true,"message":"Voyage backend connected ✓"}`.
-5. In the PWA, open **Settings → Backend Connection**, paste the **`/exec` URL**,
-   set your **Home Location**, then tap **Test connection** → green ✓. Done.
+## Sheet schema
 
-### How media works
-On upload, images are compressed client-side, named `YYYY-MM-DD_City_xxxxx.jpg`,
-and POSTed to Apps Script. The script saves them under
-`Drive/Travel_App_Media/<YYYY-MM-DD_City>/`, sets them to public-link view, and
-writes the sharing URLs into the trip's row. Offline, photos preview from local
-data URLs until sync runs.
+| Tab | Columns |
+|-----|---------|
+| `Trips` | `ID, City, State_Country, Start_Date, End_Date, Transport_Mode, Accommodation, Drive_Folder_URL, Photo_URLs` |
+| `Holidays` | `Date (YYYY-MM-DD), Holiday_Name` |
 
-### Security model
-There's no auth token — the only gate is the **unguessable random `/exec` URL**
-plus "Anyone" access, which is fine for a personal single-user app. Just don't
-share the URL publicly. (If you ever want auth back, re-add a token check inside
-`route_` in `gas/Code.gs`.)
+## How it works
 
----
+- **Offline-first:** all data lives in **IndexedDB** (`src/db/idb.js`). Writes
+  apply instantly; when offline they queue in an outbox and flush to the sheet
+  when connectivity returns.
+- **Media:** images are compressed on-device via an HTML5 Canvas redraw
+  (`src/utils/imageCompress.js`) and streamed to Apps Script **one request per
+  file** (sequential queue) to dodge execution timeouts. Apps Script files them
+  into `Travel_App_Media/<date>_<City>/` on Drive, makes them link-viewable, and
+  writes the URLs back to the row.
+- **Leave optimizer** (`src/utils/leaveOptimizer.js`): slides an N-day window
+  across the next 52 weeks and ranks start dates by *fewest company leaves*,
+  stacking the trip onto weekends + public holidays. A custom holiday list
+  pasted in Settings fully overrides the bundled default calendar.
+- **Themes:** four profiles (AMOLED, Light, Material Mood, Contextual Sky) driven
+  by CSS custom properties swapped at runtime in `src/context/AppContext.jsx`.
+  Sky mode retints by local clock (morning/afternoon/evening/night).
 
-## 📁 Project Structure
+## Project layout
 
 ```
 src/
-  App.jsx                  # shell + liquid tab transitions
-  context/AppContext.jsx   # global state: settings, trips, theme, sync
-  db/db.js                 # Dexie (IndexedDB) offline store + outbox
-  api/client.js            # Apps Script client (URL only, no token)
-  sync/useSync.js          # background sync worker
-  lib/
-    theme.js               # 4 themes, mood accents, sky-dynamic gradient
-    leaveOptimizer.js      # sliding-window arbitrage engine
-    holidays.js            # default + custom holiday parsing/override
-    indiaStates.js         # 36 states/UTs + coverage calc
-    insights.js            # analytics + per-city fun insights
-    imageCompress.js       # client-side compression + naming index
-    flights.js             # Google Flights deep links
-  components/              # GlassCard, BottomNav, CityCard, modals, icons…
-  tabs/                    # Timeline, Planner, Insights, Settings
-gas/Code.gs               # Google Apps Script backend
+  api/api.js              Apps Script client (GET getAll, POST save/delete/upload)
+  db/idb.js               IndexedDB wrapper (trips / meta / outbox)
+  context/AppContext.jsx  global state, theme engine, sync, upload queue
+  utils/                  dates, leaveOptimizer, insights, imageCompress
+  data/                   default holidays, India states table
+  components/             Background, BottomNav, CityCard, CityDetail, TripForm…
+  components/tabs/        TimelineFeed, Planner, Analytics, Settings
+Code.gs                   Google Apps Script backend
 ```
-
----
-
-## 📦 Data Export
-
-Settings → **Export JSON** (full backup incl. settings) or **Export CSV**
-(trips only). Everything stays on-device.
-
----
-
-## 📝 License
-
-Personal project — use freely.
