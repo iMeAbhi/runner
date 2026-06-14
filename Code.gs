@@ -110,6 +110,8 @@ function doPost(e) {
         return json({ deleted: deleteTrip(body.id) });
       case 'uploadImage':
         return json({ url: uploadImage(body) });
+      case 'syncFolder':
+        return json(syncFolder(body));
       default:
         return json({ error: 'Unknown action: ' + body.action });
     }
@@ -169,16 +171,37 @@ function getOrCreateFolder(name, parent) {
   return it.hasNext() ? it.next() : scope.createFolder(name);
 }
 
+/** Pull a Drive folder ID out of a folder URL (…/folders/<ID>). */
+function folderIdFromUrl(url) {
+  if (!url) return null;
+  var m = String(url).match(/folders\/([A-Za-z0-9_\-]+)/);
+  return m ? m[1] : null;
+}
+
+/** Resolve the parent folder: the user-configured root, else Travel_App_Media. */
+function resolveRoot(rootFolderId) {
+  if (rootFolderId) {
+    try { return DriveApp.getFolderById(rootFolderId); } catch (e) { /* fall through */ }
+  }
+  return getOrCreateFolder(MEDIA_ROOT);
+}
+
+/** Per-trip sub-folder name: "<City>_<YYYY-MM>" (location + month-year). */
+function tripFolderName(city, startDate) {
+  var c = (city || 'Trip').replace(/[^\w\- ]/g, '').trim() || 'Trip';
+  var ym = (startDate || '').slice(0, 7) || 'undated';
+  return c + '_' + ym;
+}
+
 /**
- * Archive one image into Travel_App_Media/<YYYY-MM-DD>_<City>/, make it publicly
- * viewable, append the share URL to the trip's Photo_URLs cell, and return the URL.
+ * Archive one image into <root>/<City>_<YYYY-MM>/, make it publicly viewable,
+ * append the share URL to the trip's Photo_URLs cell, and return the URL.
+ * `body.rootFolderId` (from Settings) is the parent; falls back to Travel_App_Media.
  * Called once per image (sequential queue) to stay under execution limits.
  */
 function uploadImage(body) {
-  var city = (body.city || 'Trip').replace(/[^\w\- ]/g, '').trim() || 'Trip';
-  var date = (body.startDate || '').slice(0, 10) || 'undated';
-  var root = getOrCreateFolder(MEDIA_ROOT);
-  var folder = getOrCreateFolder(date + '_' + city, root);
+  var root = resolveRoot(body.rootFolderId);
+  var folder = getOrCreateFolder(tripFolderName(body.city, body.startDate), root);
 
   var bytes = Utilities.base64Decode(body.base64);
   var blob = Utilities.newBlob(bytes, body.mime || 'image/jpeg',
@@ -205,4 +228,51 @@ function uploadImage(body) {
     sheet.getRange(row, photoCol).setValue(merged);
   }
   return url;
+}
+
+/**
+ * Re-read a trip's Drive folder and make the gallery mirror it. Lists every image
+ * in the folder (resolved from the stored folder URL, or derived as
+ * <root>/<City>_<YYYY-MM>/), ensures each is link-viewable (so photos the user
+ * dropped into the folder by hand also become public), rewrites the row's
+ * Photo_URLs to match, and returns the URLs.
+ *   body = { id, folderUrl, rootFolderId, city, startDate }
+ */
+function syncFolder(body) {
+  var folder = null;
+  var fid = folderIdFromUrl(body.folderUrl);
+  if (fid) {
+    try { folder = DriveApp.getFolderById(fid); } catch (e) { folder = null; }
+  }
+  if (!folder) {
+    // No stored folder — try to locate the derived sub-folder under the root.
+    var root = resolveRoot(body.rootFolderId);
+    var name = tripFolderName(body.city, body.startDate);
+    var it = root.getFoldersByName(name);
+    if (it.hasNext()) folder = it.next();
+  }
+  if (!folder) return { urls: [], folderUrl: '' };
+
+  var files = folder.getFiles();
+  var urls = [];
+  while (files.hasNext()) {
+    var f = files.next();
+    if (f.getMimeType().indexOf('image/') === 0) {
+      try {
+        f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (e) { /* may already be shared or be a shortcut */ }
+      urls.push('https://lh3.googleusercontent.com/d/' + f.getId());
+    }
+  }
+
+  // Mirror the folder contents into the sheet row.
+  if (body.id) {
+    var sheet = getSheet(TRIPS_TAB, TRIP_HEADERS);
+    var row = findRowById(sheet, body.id);
+    if (row !== -1) {
+      sheet.getRange(row, TRIP_HEADERS.indexOf('Drive_Folder_URL') + 1).setValue(folder.getUrl());
+      sheet.getRange(row, TRIP_HEADERS.indexOf('Photo_URLs') + 1).setValue(urls.join(', '));
+    }
+  }
+  return { urls: urls, folderUrl: folder.getUrl() };
 }
