@@ -27,7 +27,7 @@ export default function App() {
   const { sync, settings } = useApp();
   const Active = TABS[tab];
 
-  const needsSetup = !settings.APPS_SCRIPT_URL || !settings.SECURE_TOKEN;
+  const needsSetup = !settings.APPS_SCRIPT_URL;
 
   return (
     <div className="relative min-h-screen">

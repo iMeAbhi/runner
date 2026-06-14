@@ -18,7 +18,6 @@ const STORAGE_KEY = 'voyage.settings.v1';
 
 const DEFAULT_SETTINGS = {
   APPS_SCRIPT_URL: '',
-  SECURE_TOKEN: '',
   HOME_LOCATION: 'Hyderabad',
   // Annual leave allocation base limits.
   ANNUAL_LEAVES: { casual: 12, privilege: 18, sick: 12 },

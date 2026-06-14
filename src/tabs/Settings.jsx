@@ -7,37 +7,15 @@ import GlassCard from '../components/GlassCard.jsx';
 /** Tab D — minimalist settings: secure config, holidays, leaves, themes, data. */
 export default function Settings() {
   const { settings, updateSettings, updateNested, customHolidays, usingCustomHolidays, exportBackup, exportCsv, sync } = useApp();
-  const [showToken, setShowToken] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
-  const [copied, setCopied] = useState(false);
-
-  // Generate a cryptographically strong token (no manual key needed).
-  const generateToken = () => {
-    const bytes = new Uint8Array(24);
-    crypto.getRandomValues(bytes);
-    const token =
-      'vy_' + Array.from(bytes, (b) => b.toString(36).padStart(2, '0')).join('').slice(0, 36);
-    updateSettings({ SECURE_TOKEN: token });
-    setShowToken(true);
-  };
-
-  const copyToken = async () => {
-    try {
-      await navigator.clipboard.writeText(settings.SECURE_TOKEN);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setShowToken(true);
-    }
-  };
 
   const test = async () => {
     setTesting(true);
     setTestResult(null);
     try {
       const res = await api.ping(settings);
-      setTestResult({ ok: true, msg: res.message || 'Handshake OK ✓' });
+      setTestResult({ ok: true, msg: res.message || 'Connected ✓' });
     } catch (err) {
       setTestResult({ ok: false, msg: err.message });
     } finally {
@@ -52,8 +30,8 @@ export default function Settings() {
         <h1 className="font-display text-3xl font-bold text-ink">Settings</h1>
       </header>
 
-      {/* Secure backend handshake */}
-      <Section title="Backend Connection" subtitle="Stored only in this browser (localStorage).">
+      {/* Backend connection — just the deployed Apps Script URL */}
+      <Section title="Backend Connection" subtitle="Paste your deployed Apps Script URL. Stored only in this browser.">
         <Field label="Apps Script URL">
           <input
             value={settings.APPS_SCRIPT_URL}
@@ -61,42 +39,6 @@ export default function Settings() {
             placeholder="https://script.google.com/macros/s/.../exec"
             className={inputCls}
           />
-        </Field>
-        <Field label="Secure Token">
-          <div className="flex gap-2">
-            <input
-              type={showToken ? 'text' : 'password'}
-              value={settings.SECURE_TOKEN}
-              onChange={(e) => updateSettings({ SECURE_TOKEN: e.target.value.trim() })}
-              placeholder="Tap Generate →"
-              className={inputCls}
-            />
-            <button onClick={() => setShowToken((s) => !s)} className="glass rounded-3xl px-3 text-xs text-ink">
-              {showToken ? 'Hide' : 'Show'}
-            </button>
-          </div>
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={generateToken}
-              className="flex-1 rounded-3xl bg-accent/90 py-2 text-xs font-semibold text-black shadow-glow active:scale-95"
-            >
-              ✨ Generate token
-            </button>
-            <button
-              onClick={copyToken}
-              disabled={!settings.SECURE_TOKEN}
-              className="glass flex-1 rounded-3xl py-2 text-xs font-semibold text-ink active:scale-95 disabled:opacity-40"
-            >
-              {copied ? 'Copied ✓' : 'Copy'}
-            </button>
-          </div>
-          {settings.SECURE_TOKEN && (
-            <p className="mt-2 text-[11px] leading-relaxed text-ink-soft">
-              Paste this exact token into your Apps Script <code className="text-accent">setup()</code> function
-              (the <code className="text-accent">MY_TOKEN</code> value), run <code>setup</code>, then re-deploy. Both
-              sides must match.
-            </p>
-          )}
         </Field>
         <Field label="Home Location">
           <input

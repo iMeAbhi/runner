@@ -1,14 +1,13 @@
-// Secure client for the Google Apps Script backend.
+// Client for the Google Apps Script backend.
 //
-// Every request carries the user's SECURE_TOKEN in the JSON payload (and, for
-// GET, the query string). Apps Script web apps cannot read custom request
-// headers, so the token travels in the body/query — validated server-side
-// against a hidden cell / script property before any sheet or Drive access.
+// No auth token — setup is just the deployed /exec URL. The script's "Anyone"
+// access + the unguessable random URL is the only gate (fine for a personal,
+// single-user app).
 //
 // Requests use `redirect: 'follow'` because Apps Script /exec issues a 302 to
 // googleusercontent.com for the actual payload.
 
-/** Thrown for auth/transport failures so callers can surface a clean message. */
+/** Thrown for transport failures so callers can surface a clean message. */
 export class ApiError extends Error {
   constructor(message, code) {
     super(message);
@@ -19,7 +18,6 @@ export class ApiError extends Error {
 
 function requireConfig(settings) {
   if (!settings?.APPS_SCRIPT_URL) throw new ApiError('Apps Script URL not configured', 'NO_URL');
-  if (!settings?.SECURE_TOKEN) throw new ApiError('Secure token not configured', 'NO_TOKEN');
 }
 
 /**
@@ -28,7 +26,7 @@ function requireConfig(settings) {
  */
 async function post(settings, action, payload = {}) {
   requireConfig(settings);
-  const body = JSON.stringify({ action, token: settings.SECURE_TOKEN, ...payload });
+  const body = JSON.stringify({ action, ...payload });
 
   const res = await fetch(settings.APPS_SCRIPT_URL, {
     method: 'POST',
@@ -43,7 +41,6 @@ async function get(settings, action, params = {}) {
   requireConfig(settings);
   const url = new URL(settings.APPS_SCRIPT_URL);
   url.searchParams.set('action', action);
-  url.searchParams.set('token', settings.SECURE_TOKEN);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
   const res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' });
@@ -67,7 +64,7 @@ async function handle(res) {
 /* ── Public API surface ───────────────────────────────────────────────── */
 
 export const api = {
-  /** Verify URL + token handshake. */
+  /** Verify the backend URL is reachable. */
   ping: (settings) => get(settings, 'ping'),
 
   /** Fetch all trip rows from the sheet. */

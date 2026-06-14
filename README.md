@@ -23,7 +23,7 @@ a single Google Sheet you own, driven by a secure Google Apps Script endpoint.
 - **Insights Dashboard** — morphing time filters (1M → 1Y → custom range),
   volumetric counts (cities, countries, flights, trains, stays), longest trip,
   most-visited hub, and an **India coverage** wheel across all 36 states & UTs.
-- **Settings** — secure backend handshake, corporate holiday paste (overrides
+- **Settings** — one-field backend connection, corporate holiday paste (overrides
   the default calendar), leave allocation, 4 theme profiles, JSON/CSV export.
 - **Offline-first** — every action writes to IndexedDB instantly; a background
   worker syncs to your Sheet when the network returns. Installable PWA.
@@ -60,35 +60,23 @@ npm run preview    # preview the production build
 
 ---
 
-## 🔐 Backend Setup (Google Apps Script + Sheet)
+## 🔌 Backend Setup (Google Apps Script + Sheet) — no token, just a URL
 
-1. **Create a Google Sheet** (any name). It will auto-create a `Trips` tab and a
-   hidden `Config` tab on first run.
+1. **Create a Google Sheet** (any name). It auto-creates a `Trips` tab on first use.
 2. **Extensions → Apps Script.** Delete the stub and paste
    [`gas/Code.gs`](gas/Code.gs).
-3. **Set your secret token (easy path):** edit the `MY_TOKEN` value inside the
-   `setup()` function, then select **`setup`** in the editor's function dropdown
-   and click **▶ Run** (approve the permission prompt once). This stores the
-   token and creates the `Trips` tab.
-   *(Alternatively: Project Settings → Script properties → add
-   `SECURE_TOKEN = <key>`.)*
    > ⚠️ Don't click Run on `doGet`/`doPost` — those only work over HTTP and will
    > throw `Cannot read properties of undefined (reading 'parameter')` if run
-   > from the editor. Use `setup()` / `testLocally()` instead.
-4. **Deploy → New deployment → Web app:**
+   > from the editor. (Optionally run `setup` once to create the tab + approve
+   > permissions early.)
+3. **Deploy → New deployment → Web app:**
    - *Execute as:* **Me**
-   - *Who has access:* **Anyone** (the token still gates every request)
-5. Copy the **`/exec` URL**. Test it in a browser:
-   `…/exec?action=ping&token=YOUR_TOKEN` → should return
+   - *Who has access:* **Anyone**
+4. Copy the **`/exec` URL**. Test it in a browser:
+   `…/exec?action=ping` → should return
    `{"ok":true,"message":"Voyage backend connected ✓"}`.
-   *(Opening `/exec` with no token correctly returns `Unauthorized: bad token` —
-   that means it's working.)*
-6. In the PWA, open **Settings** and fill in:
-   - **Apps Script URL** → the `/exec` URL
-   - **Secure Token** → the same token from step 3
-   - **Home Location** → e.g. `Hyderabad`
-   - Leave allocations & (optional) your corporate holiday list
-7. Tap **Test connection** — you should see `Voyage backend connected ✓`.
+5. In the PWA, open **Settings → Backend Connection**, paste the **`/exec` URL**,
+   set your **Home Location**, then tap **Test connection** → green ✓. Done.
 
 ### How media works
 On upload, images are compressed client-side, named `YYYY-MM-DD_City_xxxxx.jpg`,
@@ -98,11 +86,10 @@ writes the sharing URLs into the trip's row. Offline, photos preview from local
 data URLs until sync runs.
 
 ### Security model
-Apps Script web apps can't read custom request headers, so the shared secret is
-sent in the request **body** (POST) / **query** (GET) and validated server-side
-against your Script Property (or hidden `Config!B1`) before any Sheet/Drive
-access. "Anyone" access only means "reachable without a Google login" — the
-token is the real gate. **Use a long, random token.**
+There's no auth token — the only gate is the **unguessable random `/exec` URL**
+plus "Anyone" access, which is fine for a personal single-user app. Just don't
+share the URL publicly. (If you ever want auth back, re-add a token check inside
+`route_` in `gas/Code.gs`.)
 
 ---
 
@@ -113,7 +100,7 @@ src/
   App.jsx                  # shell + liquid tab transitions
   context/AppContext.jsx   # global state: settings, trips, theme, sync
   db/db.js                 # Dexie (IndexedDB) offline store + outbox
-  api/client.js            # secure Apps Script client (token in payload)
+  api/client.js            # Apps Script client (URL only, no token)
   sync/useSync.js          # background sync worker
   lib/
     theme.js               # 4 themes, mood accents, sky-dynamic gradient

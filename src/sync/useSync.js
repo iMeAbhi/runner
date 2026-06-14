@@ -15,7 +15,7 @@ export function useSync(settings) {
   const [lastSync, setLastSync] = useState(null);
   const running = useRef(false);
 
-  const configured = Boolean(settings?.APPS_SCRIPT_URL && settings?.SECURE_TOKEN);
+  const configured = Boolean(settings?.APPS_SCRIPT_URL);
 
   /** Push queued mutations, then pull the authoritative snapshot. */
   const flush = useCallback(async () => {

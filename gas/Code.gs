@@ -3,34 +3,23 @@
  * Google Apps Script backend (serverless API over a single user-owned Sheet).
  *
  * ────────────────────────────────────────────────────────────────────────
- * SETUP
- * 1. Create a Google Sheet. Note its name; this script auto-creates a "Trips"
- *    tab and a hidden "Config" tab on first run.
+ * SETUP (no token — just deploy and paste the URL)
+ * 1. Create a Google Sheet. This script auto-creates a "Trips" tab on first use.
  * 2. Extensions → Apps Script → paste this file as Code.gs.
- * 3. Set your secret token:
- *      a) Project Settings → Script properties → add  SECURE_TOKEN = <your-key>
- *      OR
- *      b) leave the HARDCODED_TOKEN constant below (less secure).
- *    The PWA must send the exact same token.
+ * 3. (Optional) Select `setup` in the function dropdown → ▶ Run once to create
+ *    the Trips tab and approve permissions up front.
  * 4. Deploy → New deployment → type "Web app":
  *      - Execute as: Me
- *      - Who has access: Anyone  (token still gates every request)
- *    Copy the /exec URL into the PWA Settings → Apps Script URL.
+ *      - Who has access: Anyone
+ *    Copy the /exec URL into the PWA Settings → Apps Script URL. That's it.
  * ────────────────────────────────────────────────────────────────────────
  *
- * SECURITY MODEL
- * Apps Script web apps cannot read custom HTTP headers, so the shared secret
- * travels in the request body (POST) or query string (GET). Every entry point
- * validates it with a constant-time-ish comparison before touching the Sheet or
- * Drive. "Anyone" access is required for the PWA to reach the endpoint without a
- * Google login; the token is what actually authorizes the caller.
+ * NOTE: There is no auth token. The only gate is the unguessable random /exec
+ * URL plus "Anyone" access — sufficient for a personal, single-user app. Don't
+ * share the URL publicly. (If you ever want auth back, gate route_ on a token.)
  */
 
-// Fallback token if no Script Property is set. Prefer the Script Property.
-var HARDCODED_TOKEN = 'CHANGE_ME_SET_A_STRONG_TOKEN';
-
 var SHEET_TRIPS = 'Trips';
-var SHEET_CONFIG = 'Config';
 var DRIVE_ROOT = 'Travel_App_Media';
 
 // Column order for the Trips sheet (row 1 = header).
@@ -50,28 +39,21 @@ var COLUMNS = [
   'updatedAt',
 ];
 
-/* ── One-time setup helpers (run these from the editor) ───────────────── */
+/* ── One-time setup helper (optional — run from the editor) ───────────── */
 
 /**
- * RUN THIS ONCE from the Apps Script editor to store your secret token.
- * 1. Edit the value below.
- * 2. Select `setup` in the function dropdown → click Run → approve permissions.
- * Then deploy as a Web app and use the SAME token in the PWA Settings.
+ * Optional: select `setup` in the function dropdown → ▶ Run once to create the
+ * Trips tab and approve permissions before deploying. Not required — the tab is
+ * also created lazily on the first request.
  */
 function setup() {
-  var MY_TOKEN = 'CHANGE_ME_SET_A_STRONG_TOKEN'; // <-- put your real token here
-  PropertiesService.getScriptProperties().setProperty('SECURE_TOKEN', MY_TOKEN);
-  getOrCreateSheet_(SHEET_TRIPS); // create the Trips tab now
-  getOrCreateSheet_(SHEET_CONFIG);
-  Logger.log('✓ Token saved. Now deploy: Deploy → New deployment → Web app.');
-  Logger.log('Test in browser: <your /exec url>?action=ping&token=' + MY_TOKEN);
-  return 'Setup complete — token stored. See the Execution log above.';
+  getOrCreateSheet_(SHEET_TRIPS);
+  Logger.log('✓ Ready. Now deploy: Deploy → New deployment → Web app (Anyone).');
+  return 'Setup complete — Trips sheet ready. See the Execution log above.';
 }
 
 /** Safe to run from the editor — confirms the script is healthy (no HTTP needed). */
 function testLocally() {
-  var token = PropertiesService.getScriptProperties().getProperty('SECURE_TOKEN');
-  Logger.log(token ? '✓ SECURE_TOKEN is set.' : '✗ SECURE_TOKEN missing — run setup() first.');
   Logger.log('Trips currently stored: ' + getTrips_().length);
   return 'OK — check the Execution log.';
 }
@@ -83,9 +65,7 @@ function doGet(e) {
   if (!e || !e.parameter) {
     return json_({
       ok: false,
-      error:
-        'doGet must be called over HTTP, not run from the editor. ' +
-        'Run setup() once, deploy as a Web app, then open <url>?action=ping&token=YOUR_TOKEN',
+      error: 'doGet must be called over HTTP, not run from the editor. Deploy as a Web app first.',
       code: 'NO_EVENT',
     });
   }
@@ -109,13 +89,10 @@ function doPost(e) {
   return route_(e, body.action, body);
 }
 
-/* ── Router + auth ────────────────────────────────────────────────────── */
+/* ── Router ───────────────────────────────────────────────────────────── */
 
 function route_(e, action, params) {
   try {
-    if (!checkToken_(params.token)) {
-      return json_({ ok: false, error: 'Unauthorized: bad token', code: 'UNAUTHORIZED' });
-    }
     switch (action) {
       case 'ping':
         return json_({ ok: true, message: 'Voyage backend connected ✓', time: new Date().toISOString() });
@@ -135,34 +112,6 @@ function route_(e, action, params) {
   }
 }
 
-/**
- * Validate the supplied token against, in order:
- *   1. Script Property SECURE_TOKEN (recommended)
- *   2. A hidden cell Config!B1 (optional)
- *   3. HARDCODED_TOKEN constant
- */
-function checkToken_(supplied) {
-  if (!supplied) return false;
-  var expected = PropertiesService.getScriptProperties().getProperty('SECURE_TOKEN');
-  if (!expected) {
-    try {
-      var cfg = getOrCreateSheet_(SHEET_CONFIG);
-      var cell = cfg.getRange('B1').getValue();
-      if (cell) expected = String(cell);
-    } catch (e) {}
-  }
-  if (!expected) expected = HARDCODED_TOKEN;
-  return safeEquals_(String(supplied), String(expected));
-}
-
-// Length-aware comparison to reduce trivial timing leaks.
-function safeEquals_(a, b) {
-  if (a.length !== b.length) return false;
-  var diff = 0;
-  for (var i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
 /* ── Sheet helpers ────────────────────────────────────────────────────── */
 
 function getSpreadsheet_() {
@@ -177,10 +126,6 @@ function getOrCreateSheet_(name) {
     if (name === SHEET_TRIPS) {
       sh.appendRow(COLUMNS);
       sh.setFrozenRows(1);
-    }
-    if (name === SHEET_CONFIG) {
-      sh.getRange('A1').setValue('SECURE_TOKEN');
-      sh.hideSheet();
     }
   }
   // Ensure header exists for Trips.
