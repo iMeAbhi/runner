@@ -1,0 +1,29 @@
+{
+  "name": "travel-log-leave-optimizer",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Offline-first Travel Tracker & Leave Optimizer PWA. React + Vite + Tailwind + Framer Motion, backed by a user-owned Google Sheet via Apps Script.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "echo \"(no linter configured)\" && exit 0"
+  },
+  "dependencies": {
+    "browser-image-compression": "^2.0.2",
+    "dexie": "^4.0.8",
+    "dexie-react-hooks": "^1.1.7",
+    "framer-motion": "^11.3.19",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.40",
+    "tailwindcss": "^3.4.7",
+    "vite": "^5.3.5",
+    "vite-plugin-pwa": "^0.20.1"
+  }
+}

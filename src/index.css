@@ -1,0 +1,152 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * "Liquid Material" runtime theme tokens.
+ * Each [data-theme] on <html> rebinds the palette so the whole app re-skins
+ * with a single attribute swap. Channels are stored as space-separated RGB
+ * triplets so Tailwind's `rgb(var(--x) / <alpha>)` bridge works.
+ */
+:root {
+  --accent: 99 179 237; /* default aviation blue */
+  --accent-2: 56 232 196;
+  --canvas: 0 0 0;
+  --ink: 245 247 250;
+  --ink-soft: 160 170 185;
+
+  /* Glass surface defaults (overridable per theme) */
+  --glass-bg: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37), inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+
+  /* Dynamic backdrop gradient (driven by Sky Dynamic + Mood themes) */
+  --backdrop: radial-gradient(120% 120% at 50% 0%, #0a0a0f 0%, #000000 60%);
+}
+
+/* ── Theme 1: AMOLED Dark — pitch black + neon glow ───────────────────── */
+[data-theme='amoled'] {
+  --canvas: 0 0 0;
+  --ink: 245 247 250;
+  --ink-soft: 150 160 175;
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6), inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+  --backdrop: radial-gradient(130% 130% at 50% -10%, #07070b 0%, #000000 55%);
+  color-scheme: dark;
+}
+
+/* ── Theme 2: Clean Light — frosted milk glass on warm pastel ─────────── */
+[data-theme='light'] {
+  --canvas: 247 244 239;
+  --ink: 24 26 32;
+  --ink-soft: 90 96 110;
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.7);
+  --glass-shadow: 0 8px 32px 0 rgba(80, 70, 60, 0.16), inset 0 1px 0 0 rgba(255, 255, 255, 0.6);
+  --backdrop: linear-gradient(160deg, #fbe9d7 0%, #f7f0ff 45%, #e6f6ff 100%);
+  color-scheme: light;
+}
+
+/* ── Theme 3: Material Mood — accent-driven dynamic palette ───────────── */
+[data-theme='mood'] {
+  --canvas: 12 10 18;
+  --ink: 245 247 250;
+  --ink-soft: 165 160 185;
+  --glass-bg: rgba(255, 255, 255, 0.07);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.45), inset 0 1px 0 0 rgba(255, 255, 255, 0.12);
+  /* --backdrop set dynamically from selected accent in theme.js */
+  color-scheme: dark;
+}
+
+/* ── Theme 4: Contextual Sky Dynamic — time-of-day fluid gradient ─────── */
+[data-theme='sky'] {
+  --canvas: 8 10 20;
+  --ink: 250 250 255;
+  --ink-soft: 200 205 225;
+  --glass-bg: rgba(255, 255, 255, 0.1);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.35), inset 0 1px 0 0 rgba(255, 255, 255, 0.16);
+  /* --backdrop set dynamically from local clock in theme.js */
+  color-scheme: dark;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: rgb(var(--ink));
+  background: rgb(var(--canvas));
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keyframes declared here so they exist regardless of Tailwind utility usage. */
+@keyframes sky-drift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* The animated backdrop layer lives behind everything. */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--backdrop);
+  background-size: 200% 200%;
+  transition: background 1.2s ease;
+}
+
+.app-backdrop[data-animate='true'] {
+  animation: sky-drift 18s ease-in-out infinite;
+}
+
+/* Reusable liquid-glass surface. */
+@layer components {
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+  }
+  .glass-strong {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    backdrop-filter: blur(40px) saturate(180%);
+  }
+}
+
+/* Hide scrollbars on horizontal filter rails while keeping scroll. */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Safe-area padding for the sticky bottom nav on notched devices. */
+.pb-safe {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+}
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
