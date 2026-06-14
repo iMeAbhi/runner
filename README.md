@@ -66,12 +66,23 @@ npm run preview    # preview the production build
    hidden `Config` tab on first run.
 2. **Extensions → Apps Script.** Delete the stub and paste
    [`gas/Code.gs`](gas/Code.gs).
-3. **Set your secret token** — *Project Settings → Script properties* →
-   add `SECURE_TOKEN = <a-strong-random-key>`.
+3. **Set your secret token (easy path):** edit the `MY_TOKEN` value inside the
+   `setup()` function, then select **`setup`** in the editor's function dropdown
+   and click **▶ Run** (approve the permission prompt once). This stores the
+   token and creates the `Trips` tab.
+   *(Alternatively: Project Settings → Script properties → add
+   `SECURE_TOKEN = <key>`.)*
+   > ⚠️ Don't click Run on `doGet`/`doPost` — those only work over HTTP and will
+   > throw `Cannot read properties of undefined (reading 'parameter')` if run
+   > from the editor. Use `setup()` / `testLocally()` instead.
 4. **Deploy → New deployment → Web app:**
    - *Execute as:* **Me**
    - *Who has access:* **Anyone** (the token still gates every request)
-5. Copy the **`/exec` URL**.
+5. Copy the **`/exec` URL**. Test it in a browser:
+   `…/exec?action=ping&token=YOUR_TOKEN` → should return
+   `{"ok":true,"message":"Voyage backend connected ✓"}`.
+   *(Opening `/exec` with no token correctly returns `Unauthorized: bad token` —
+   that means it's working.)*
 6. In the PWA, open **Settings** and fill in:
    - **Apps Script URL** → the `/exec` URL
    - **Secure Token** → the same token from step 3

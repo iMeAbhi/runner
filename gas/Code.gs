@@ -50,16 +50,59 @@ var COLUMNS = [
   'updatedAt',
 ];
 
+/* ── One-time setup helpers (run these from the editor) ───────────────── */
+
+/**
+ * RUN THIS ONCE from the Apps Script editor to store your secret token.
+ * 1. Edit the value below.
+ * 2. Select `setup` in the function dropdown → click Run → approve permissions.
+ * Then deploy as a Web app and use the SAME token in the PWA Settings.
+ */
+function setup() {
+  var MY_TOKEN = 'CHANGE_ME_SET_A_STRONG_TOKEN'; // <-- put your real token here
+  PropertiesService.getScriptProperties().setProperty('SECURE_TOKEN', MY_TOKEN);
+  getOrCreateSheet_(SHEET_TRIPS); // create the Trips tab now
+  getOrCreateSheet_(SHEET_CONFIG);
+  Logger.log('✓ Token saved. Now deploy: Deploy → New deployment → Web app.');
+  Logger.log('Test in browser: <your /exec url>?action=ping&token=' + MY_TOKEN);
+  return 'Setup complete — token stored. See the Execution log above.';
+}
+
+/** Safe to run from the editor — confirms the script is healthy (no HTTP needed). */
+function testLocally() {
+  var token = PropertiesService.getScriptProperties().getProperty('SECURE_TOKEN');
+  Logger.log(token ? '✓ SECURE_TOKEN is set.' : '✗ SECURE_TOKEN missing — run setup() first.');
+  Logger.log('Trips currently stored: ' + getTrips_().length);
+  return 'OK — check the Execution log.';
+}
+
 /* ── Entry points ─────────────────────────────────────────────────────── */
 
 function doGet(e) {
-  return route_(e, (e.parameter && e.parameter.action) || 'ping', e.parameter || {});
+  // Guard against being run directly from the editor (no event object).
+  if (!e || !e.parameter) {
+    return json_({
+      ok: false,
+      error:
+        'doGet must be called over HTTP, not run from the editor. ' +
+        'Run setup() once, deploy as a Web app, then open <url>?action=ping&token=YOUR_TOKEN',
+      code: 'NO_EVENT',
+    });
+  }
+  return route_(e, e.parameter.action || 'ping', e.parameter);
 }
 
 function doPost(e) {
+  if (!e || !e.postData) {
+    return json_({
+      ok: false,
+      error: 'doPost must be called over HTTP, not run from the editor.',
+      code: 'NO_EVENT',
+    });
+  }
   var body = {};
   try {
-    body = JSON.parse((e.postData && e.postData.contents) || '{}');
+    body = JSON.parse(e.postData.contents || '{}');
   } catch (err) {
     return json_({ ok: false, error: 'Invalid JSON body', code: 'BAD_JSON' });
   }
