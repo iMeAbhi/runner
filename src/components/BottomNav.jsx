@@ -1,44 +1,43 @@
 import { motion } from 'framer-motion';
-import { CalendarIcon, ChartIcon, HomeIcon, SettingsIcon } from './icons.jsx';
+import { HomeIcon, CalendarIcon, ChartIcon, GearIcon } from './Icons.jsx';
 
 const TABS = [
   { id: 'timeline', label: 'Timeline', Icon: HomeIcon },
   { id: 'planner', label: 'Planner', Icon: CalendarIcon },
   { id: 'insights', label: 'Insights', Icon: ChartIcon },
-  { id: 'settings', label: 'Settings', Icon: SettingsIcon },
+  { id: 'settings', label: 'Settings', Icon: GearIcon },
 ];
 
-/** Sticky glassmorphic bottom navigation with a sliding accent pill. */
 export default function BottomNav({ active, onChange }) {
   return (
-    <nav className="pb-safe fixed inset-x-0 bottom-0 z-40 flex justify-center px-4">
-      <div className="glass-strong mx-auto flex w-full max-w-md items-center justify-between rounded-4xl px-2 py-2 shadow-glass">
+    <nav className="fixed inset-x-0 bottom-0 z-40 flex justify-center pb-[max(env(safe-area-inset-bottom),0.75rem)] px-4">
+      <div className="glass-strong flex w-full max-w-md items-center justify-around rounded-4xl px-2 py-2">
         {TABS.map(({ id, label, Icon }) => {
           const isActive = active === id;
           return (
             <button
               key={id}
               onClick={() => onChange(id)}
-              className="relative flex flex-1 flex-col items-center gap-0.5 rounded-3xl px-2 py-2 outline-none"
-              aria-label={label}
-              aria-current={isActive ? 'page' : undefined}
+              className="relative flex flex-1 flex-col items-center gap-1 rounded-3xl py-2 text-[11px] font-semibold"
+              aria-current={isActive}
             >
               {isActive && (
                 <motion.span
                   layoutId="nav-pill"
-                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                  className="absolute inset-0 rounded-3xl bg-accent/20 shadow-glow"
+                  className="absolute inset-0 rounded-3xl"
+                  style={{ background: 'rgb(var(--accent) / 0.18)', boxShadow: '0 0 18px -4px rgb(var(--accent) / 0.6)' }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 32 }}
                 />
               )}
               <Icon
-                className={`relative z-10 h-6 w-6 transition-colors ${
-                  isActive ? 'text-accent' : 'text-ink-soft'
-                }`}
+                className="relative z-10"
+                width={22}
+                height={22}
+                style={{ color: isActive ? 'rgb(var(--accent))' : 'rgb(var(--ink-dim))' }}
               />
               <span
-                className={`relative z-10 text-[10px] font-medium transition-colors ${
-                  isActive ? 'text-ink' : 'text-ink-soft'
-                }`}
+                className="relative z-10"
+                style={{ color: isActive ? 'rgb(var(--ink))' : 'rgb(var(--ink-dim))' }}
               >
                 {label}
               </span>

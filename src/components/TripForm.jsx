@@ -1,193 +1,166 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useApp } from '../context/AppContext.jsx';
-import { api } from '../api/client.js';
-import { prepareImages } from '../lib/imageCompress.js';
-import { CloseIcon, PlusIcon } from './icons.jsx';
+import { compressMany } from '../utils/imageCompress.js';
+import { CITY_NAMES, regionForCity } from '../data/cities.js';
+import { CloseIcon } from './Icons.jsx';
 
-const TRANSIT_OPTIONS = ['Flight', 'Train', 'Cab', 'Bus', 'Walking'];
+const MODES = ['Flight', 'Train', 'Cab', 'Bus', 'Walk'];
+const empty = {
+  City: '',
+  State_Country: '',
+  Start_Date: '',
+  End_Date: '',
+  Transport_Mode: 'Flight',
+  Accommodation: '',
+  Drive_Folder_URL: '', // auto-populated by the backend on photo upload
+  Photo_URLs: '',
+};
 
-/**
- * Add / edit trip sheet. Photos are compressed client-side immediately (so they
- * preview offline) and pushed to Drive via Apps Script when connectivity allows.
- */
-export default function TripForm({ trip, onClose }) {
-  const { saveTrip, settings, sync } = useApp();
-  const editing = Boolean(trip?.localId);
+// Add/edit a trip. Photos are compressed client-side and handed to the
+// sequential upload queue via saveTrip(record, compressedFiles).
+export default function TripForm({ initial, onClose }) {
+  const { saveTrip, notify } = useApp();
+  const [form, setForm] = useState({ ...empty, ...initial });
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+  // Track whether State/Country was auto-filled, so we can update it when the
+  // city changes but never clobber a value the user typed themselves.
+  const [autoRegion, setAutoRegion] = useState('');
 
-  const [form, setForm] = useState(() => ({
-    localId: trip?.localId,
-    remoteId: trip?.remoteId,
-    city: trip?.city || '',
-    state: trip?.state || '',
-    country: trip?.country || 'India',
-    startDate: trip?.startDate || '',
-    endDate: trip?.endDate || '',
-    transit: Array.isArray(trip?.transit) ? trip.transit : trip?.transit ? [trip.transit] : [],
-    accommodation: trip?.accommodation || '',
-    notes: trip?.notes || '',
-    photos: trip?.photos || [],
-    driveFolder: trip?.driveFolder || '',
-  }));
-  const [uploading, setUploading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const toggleTransit = (t) =>
-    setForm((f) => ({
-      ...f,
-      transit: f.transit.includes(t) ? f.transit.filter((x) => x !== t) : [...f.transit, t],
-    }));
-
-  const handleFiles = async (e) => {
-    const files = e.target.files;
-    if (!files?.length) return;
-    setUploading(true);
-    try {
-      const prepared = await prepareImages(files, { city: form.city, date: form.startDate });
-      // Optimistic local previews (data URLs) — usable fully offline.
-      set('photos', [...form.photos, ...prepared.map((p) => p.previewUrl)]);
-
-      // Try to push each to Drive now; ignore failures (sync retries later).
-      if (sync.configured && navigator.onLine) {
-        const urls = [];
-        for (const img of prepared) {
-          try {
-            const res = await api.uploadMedia(settings, { localId: form.localId || 'new', image: img });
-            if (res.url) urls.push(res.url);
-          } catch (err) {
-            console.warn('media upload deferred:', err);
-          }
-        }
-        if (urls.length) {
-          // Replace the just-added previews with their Drive URLs.
-          setForm((f) => ({
-            ...f,
-            photos: [...f.photos.filter((p) => !p.startsWith('data:')), ...urls],
-          }));
-        }
+  const onCityChange = (e) => {
+    const City = e.target.value;
+    setForm((f) => {
+      const region = regionForCity(City);
+      const next = { ...f, City };
+      // Autofill only if the field is empty or still holds the last suggestion.
+      if (region && (!f.State_Country || f.State_Country === autoRegion)) {
+        next.State_Country = region;
       }
-    } finally {
-      setUploading(false);
-    }
+      return next;
+    });
+    const region = regionForCity(City);
+    if (region) setAutoRegion(region);
   };
 
-  const submit = async () => {
-    if (!form.city || !form.startDate) return;
-    setSaving(true);
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.City || !form.Start_Date || !form.End_Date) {
+      notify('City and both dates are required', 'warn');
+      return;
+    }
+    if (form.End_Date < form.Start_Date) {
+      notify('End date is before start date', 'warn');
+      return;
+    }
+    setBusy(true);
     try {
-      await saveTrip({ ...form, endDate: form.endDate || form.startDate });
+      const compressed = files.length ? await compressMany(files) : [];
+      await saveTrip(form, compressed);
+      notify('Trip saved', 'ok');
       onClose();
+    } catch (err) {
+      notify(`Could not save: ${err.message}`, 'error');
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   };
 
   return (
-    <motion.div className="fixed inset-0 z-[60] flex items-end justify-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <motion.div
-        initial={{ y: '100%' }}
-        animate={{ y: 0 }}
-        exit={{ y: '100%' }}
-        transition={{ type: 'spring', stiffness: 320, damping: 34 }}
-        className="glass-strong relative max-h-[92vh] w-full max-w-md overflow-y-auto rounded-t-5xl p-5 pb-28"
+    <motion.div
+      className="fixed inset-0 z-50 flex items-end justify-center sm:items-center"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <motion.form
+        onSubmit={submit}
+        initial={{ y: 60, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 60, opacity: 0 }}
+        transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+        className="glass-strong relative z-10 max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-4xl p-5 sm:rounded-4xl"
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-2xl font-bold text-ink">{editing ? 'Edit Trip' : 'New Trip'}</h2>
-          <button onClick={onClose} className="glass flex h-9 w-9 items-center justify-center rounded-full text-ink">
-            <CloseIcon className="h-5 w-5" />
+          <h2 className="text-lg font-extrabold">{initial?.ID ? 'Edit trip' : 'Log a trip'}</h2>
+          <button type="button" onClick={onClose} className="glass rounded-full p-2">
+            <CloseIcon width={18} height={18} />
           </button>
         </div>
 
-        <div className="space-y-3">
-          <Field label="City *">
-            <input value={form.city} onChange={(e) => set('city', e.target.value)} placeholder="e.g. Leh" className={inputCls} />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="State / UT">
-              <input value={form.state} onChange={(e) => set('state', e.target.value)} placeholder="Ladakh" className={inputCls} />
-            </Field>
-            <Field label="Country">
-              <input value={form.country} onChange={(e) => set('country', e.target.value)} className={inputCls} />
-            </Field>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Start date *">
-              <input type="date" value={form.startDate} onChange={(e) => set('startDate', e.target.value)} className={inputCls} />
-            </Field>
-            <Field label="End date">
-              <input type="date" value={form.endDate} onChange={(e) => set('endDate', e.target.value)} className={inputCls} />
-            </Field>
-          </div>
+        {/* Suggestions for the City field; selecting one autofills State/Country. */}
+        <datalist id="city-suggestions">
+          {CITY_NAMES.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
 
-          <Field label="Transit">
+        <div className="grid grid-cols-2 gap-3">
+          <Field className="col-span-2" label="City" value={form.City} onChange={onCityChange} list="city-suggestions" placeholder="Start typing… e.g. Leh" autoComplete="off" />
+          <Field className="col-span-2" label="State / Country (auto-fills)" value={form.State_Country} onChange={set('State_Country')} placeholder="e.g. Ladakh" />
+          <Field type="date" label="Start" value={form.Start_Date} onChange={set('Start_Date')} />
+          <Field type="date" label="End" value={form.End_Date} onChange={set('End_Date')} />
+
+          <label className="col-span-2 flex flex-col gap-1 text-xs font-semibold text-ink-dim">
+            Transport
             <div className="flex flex-wrap gap-2">
-              {TRANSIT_OPTIONS.map((t) => (
+              {MODES.map((m) => (
                 <button
-                  key={t}
+                  key={m}
                   type="button"
-                  onClick={() => toggleTransit(t)}
-                  className={`rounded-3xl px-3 py-1.5 text-sm transition ${
-                    form.transit.includes(t) ? 'bg-accent/90 text-black' : 'bg-white/10 text-ink-soft'
-                  }`}
+                  onClick={() => setForm((f) => ({ ...f, Transport_Mode: m }))}
+                  className="pill glass"
+                  style={
+                    form.Transport_Mode === m
+                      ? { background: 'rgb(var(--accent) / 0.25)', color: 'rgb(var(--ink))' }
+                      : { color: 'rgb(var(--ink-dim))' }
+                  }
                 >
-                  {t}
+                  {m}
                 </button>
               ))}
             </div>
-          </Field>
+          </label>
 
-          <Field label="Accommodation">
-            <input value={form.accommodation} onChange={(e) => set('accommodation', e.target.value)} placeholder="Hotel / homestay name" className={inputCls} />
-          </Field>
+          <Field className="col-span-2" label="Accommodation" value={form.Accommodation} onChange={set('Accommodation')} placeholder="e.g. The Grand Dragon Hotel" />
 
-          <Field label="Notes">
-            <textarea value={form.notes} onChange={(e) => set('notes', e.target.value)} rows={2} placeholder="Highlights, memories…" className={inputCls} />
-          </Field>
-
-          {/* Photos — unlimited, compressed client-side */}
-          <Field label={`Photos${form.photos.length ? ` · ${form.photos.length}` : ''}`}>
-            <div className="grid grid-cols-4 gap-2">
-              {form.photos.map((p, i) => (
-                <div key={i} className="relative aspect-square overflow-hidden rounded-3xl">
-                  <img src={p} alt="" className="h-full w-full object-cover" />
-                  <button
-                    onClick={() => set('photos', form.photos.filter((_, x) => x !== i))}
-                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
-                  >
-                    <CloseIcon className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-              <label className="flex aspect-square cursor-pointer items-center justify-center rounded-3xl border border-dashed border-white/20 text-ink-soft">
-                {uploading ? <span className="text-xs">…</span> : <PlusIcon className="h-6 w-6" />}
-                <input type="file" accept="image/*" multiple className="hidden" onChange={handleFiles} />
-              </label>
-            </div>
-          </Field>
+          <label className="col-span-2 flex flex-col gap-1 text-xs font-semibold text-ink-dim">
+            Photos {files.length > 0 && `(${files.length} selected)`}
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(e) => setFiles([...e.target.files])}
+              className="glass rounded-3xl p-3 text-sm text-ink file:mr-3 file:rounded-full file:border-0 file:bg-accent/30 file:px-3 file:py-1 file:text-ink"
+            />
+            <span className="text-[10px] text-ink-dim">Compressed on-device, then filed into your Drive folder automatically (a sub-folder per city + month).</span>
+          </label>
         </div>
 
         <button
-          onClick={submit}
-          disabled={saving || !form.city || !form.startDate}
-          className="mt-5 w-full rounded-4xl bg-accent/90 py-3.5 font-semibold text-black shadow-glow transition active:scale-95 disabled:opacity-40"
+          type="submit"
+          disabled={busy}
+          className="mt-5 w-full rounded-3xl py-3 font-bold text-ink shadow-glow disabled:opacity-50"
+          style={{ background: 'rgb(var(--accent) / 0.85)' }}
         >
-          {saving ? 'Saving…' : editing ? 'Save changes' : 'Add trip'}
+          {busy ? 'Saving…' : 'Save trip'}
         </button>
-      </motion.div>
+      </motion.form>
     </motion.div>
   );
 }
 
-const inputCls =
-  'w-full rounded-3xl bg-white/10 px-3 py-2.5 text-sm text-ink placeholder:text-ink-soft/60 outline-none focus:ring-2 focus:ring-accent';
-
-function Field({ label, children }) {
+function Field({ label, className = '', ...props }) {
   return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium text-ink-soft">{label}</span>
-      {children}
+    <label className={`flex flex-col gap-1 text-xs font-semibold text-ink-dim ${className}`}>
+      {label}
+      <input
+        {...props}
+        className="glass rounded-3xl px-3 py-2.5 text-sm font-medium text-ink outline-none placeholder:text-ink-dim/60 focus:shadow-glow"
+      />
     </label>
   );
 }

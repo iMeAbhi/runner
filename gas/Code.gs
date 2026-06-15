@@ -1,289 +1,278 @@
 /**
- * Voyage — Travel Log & Leave Optimizer
- * Google Apps Script backend (serverless API over a single user-owned Sheet).
+ * Travel Log & Leave Optimizer — Google Apps Script backend.
+ * ===========================================================
+ * A single Web App deployment serves every operation, routed by an `action`
+ * field. It owns one spreadsheet with two tabs and a Drive media directory.
  *
- * ────────────────────────────────────────────────────────────────────────
- * SETUP (no token — just deploy and paste the URL)
- * 1. Create a Google Sheet. This script auto-creates a "Trips" tab on first use.
- * 2. Extensions → Apps Script → paste this file as Code.gs.
- * 3. (Optional) Select `setup` in the function dropdown → ▶ Run once to create
- *    the Trips tab and approve permissions up front.
- * 4. Deploy → New deployment → type "Web app":
- *      - Execute as: Me
- *      - Who has access: Anyone
- *    Copy the /exec URL into the PWA Settings → Apps Script URL. That's it.
- * ────────────────────────────────────────────────────────────────────────
+ * SHEET SCHEMA
+ *   Tab "Trips":    ID | City | State_Country | Start_Date | End_Date |
+ *                   Transport_Mode | Accommodation | Drive_Folder_URL | Photo_URLs
+ *   Tab "Holidays": Date | Holiday_Name
  *
- * NOTE: There is no auth token. The only gate is the unguessable random /exec
- * URL plus "Anyone" access — sufficient for a personal, single-user app. Don't
- * share the URL publicly. (If you ever want auth back, gate route_ on a token.)
+ * DEPLOYMENT
+ *   1. Create a Google Sheet; note its ID (the long token in its URL).
+ *   2. Extensions → Apps Script, paste this file, set SPREADSHEET_ID below.
+ *   3. Run `setup()` once (authorize scopes; it creates tabs + headers).
+ *   4. Deploy → New deployment → Web app:
+ *        Execute as: Me   |   Who has access: Anyone
+ *   5. Copy the /exec URL into the PWA's Settings → Apps Script URL.
+ *
+ * NOTE ON CORS: the PWA POSTs as text/plain (a "simple" request) so no
+ * preflight is needed. We always reply with JSON.
  */
 
-var SHEET_TRIPS = 'Trips';
-var DRIVE_ROOT = 'Travel_App_Media';
+// ⬇️ EDIT THIS — or leave blank to bind to the container spreadsheet.
+var SPREADSHEET_ID = '';
 
-// Column order for the Trips sheet (row 1 = header).
-var COLUMNS = [
-  'remoteId',
-  'localId',
-  'city',
-  'state',
-  'country',
-  'startDate',
-  'endDate',
-  'transit',
-  'accommodation',
-  'notes',
-  'photos',
-  'driveFolder',
-  'updatedAt',
+var TRIPS_TAB = 'Trips';
+var HOLIDAYS_TAB = 'Holidays';
+var MEDIA_ROOT = 'Travel_App_Media';
+
+var TRIP_HEADERS = [
+  'ID', 'City', 'State_Country', 'Start_Date', 'End_Date',
+  'Transport_Mode', 'Accommodation', 'Drive_Folder_URL', 'Photo_URLs',
 ];
+var HOLIDAY_HEADERS = ['Date', 'Holiday_Name'];
 
-/* ── One-time setup helper (optional — run from the editor) ───────────── */
+// ── Spreadsheet helpers ──────────────────────────────────────────────────────
+function getBook() {
+  return SPREADSHEET_ID
+    ? SpreadsheetApp.openById(SPREADSHEET_ID)
+    : SpreadsheetApp.getActiveSpreadsheet();
+}
 
-/**
- * Optional: select `setup` in the function dropdown → ▶ Run once to create the
- * Trips tab and approve permissions before deploying. Not required — the tab is
- * also created lazily on the first request.
- */
+function getSheet(name, headers) {
+  var book = getBook();
+  var sheet = book.getSheetByName(name);
+  if (!sheet) {
+    sheet = book.insertSheet(name);
+    sheet.appendRow(headers);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/** One-time initialiser — run manually from the editor to authorize + scaffold. */
 function setup() {
-  getOrCreateSheet_(SHEET_TRIPS);
-  Logger.log('✓ Ready. Now deploy: Deploy → New deployment → Web app (Anyone).');
-  return 'Setup complete — Trips sheet ready. See the Execution log above.';
+  getSheet(TRIPS_TAB, TRIP_HEADERS);
+  getSheet(HOLIDAYS_TAB, HOLIDAY_HEADERS);
+  return 'Tabs ready.';
 }
 
-/** Safe to run from the editor — confirms the script is healthy (no HTTP needed). */
-function testLocally() {
-  Logger.log('Trips currently stored: ' + getTrips_().length);
-  return 'OK — check the Execution log.';
-}
-
-/* ── Entry points ─────────────────────────────────────────────────────── */
-
-function doGet(e) {
-  // Guard against being run directly from the editor (no event object).
-  if (!e || !e.parameter) {
-    return json_({
-      ok: false,
-      error: 'doGet must be called over HTTP, not run from the editor. Deploy as a Web app first.',
-      code: 'NO_EVENT',
-    });
-  }
-  return route_(e, e.parameter.action || 'ping', e.parameter);
-}
-
-function doPost(e) {
-  if (!e || !e.postData) {
-    return json_({
-      ok: false,
-      error: 'doPost must be called over HTTP, not run from the editor.',
-      code: 'NO_EVENT',
-    });
-  }
-  var body = {};
-  try {
-    body = JSON.parse(e.postData.contents || '{}');
-  } catch (err) {
-    return json_({ ok: false, error: 'Invalid JSON body', code: 'BAD_JSON' });
-  }
-  return route_(e, body.action, body);
-}
-
-/* ── Router ───────────────────────────────────────────────────────────── */
-
-function route_(e, action, params) {
-  try {
-    switch (action) {
-      case 'ping':
-        return json_({ ok: true, message: 'Voyage backend connected ✓', time: new Date().toISOString() });
-      case 'getTrips':
-        return json_({ ok: true, trips: getTrips_() });
-      case 'upsertTrip':
-        return json_({ ok: true, remoteId: upsertTrip_(params.trip) });
-      case 'deleteTrip':
-        return json_({ ok: true, deleted: deleteTrip_(params.remoteId) });
-      case 'uploadMedia':
-        return json_({ ok: true, url: uploadMedia_(params.localId, params.image) });
-      default:
-        return json_({ ok: false, error: 'Unknown action: ' + action, code: 'UNKNOWN_ACTION' });
-    }
-  } catch (err) {
-    return json_({ ok: false, error: String(err && err.message ? err.message : err), code: 'SERVER_ERROR' });
-  }
-}
-
-/* ── Sheet helpers ────────────────────────────────────────────────────── */
-
-function getSpreadsheet_() {
-  return SpreadsheetApp.getActiveSpreadsheet();
-}
-
-function getOrCreateSheet_(name) {
-  var ss = getSpreadsheet_();
-  var sh = ss.getSheetByName(name);
-  if (!sh) {
-    sh = ss.insertSheet(name);
-    if (name === SHEET_TRIPS) {
-      sh.appendRow(COLUMNS);
-      sh.setFrozenRows(1);
-    }
-  }
-  // Ensure header exists for Trips.
-  if (name === SHEET_TRIPS && sh.getLastRow() === 0) {
-    sh.appendRow(COLUMNS);
-    sh.setFrozenRows(1);
-  }
-  return sh;
-}
-
-function getTrips_() {
-  var sh = getOrCreateSheet_(SHEET_TRIPS);
-  var values = sh.getDataRange().getValues();
+// ── Read all rows from a sheet into array-of-objects ─────────────────────────
+function readObjects(sheet, headers) {
+  var values = sheet.getDataRange().getValues();
   if (values.length < 2) return [];
-  var header = values[0];
+  var head = values[0];
   var out = [];
   for (var r = 1; r < values.length; r++) {
     var row = values[r];
-    if (!row[0] && !row[1] && !row[2]) continue; // skip blank rows
+    if (row.join('') === '') continue; // skip blank rows
     var obj = {};
-    for (var c = 0; c < header.length; c++) obj[header[c]] = row[c];
-    // Normalize array-ish fields back to arrays for the client.
-    obj.transit = splitCsv_(obj.transit);
-    obj.photos = splitCsv_(obj.photos);
-    obj.startDate = toIso_(obj.startDate);
-    obj.endDate = toIso_(obj.endDate);
+    for (var c = 0; c < head.length; c++) {
+      obj[head[c]] = formatCell(row[c]);
+    }
     out.push(obj);
   }
   return out;
 }
 
-/**
- * Insert or update a trip. Matches on remoteId, else localId; assigns a new
- * remoteId for fresh rows. Returns the remoteId.
- */
-function upsertTrip_(trip) {
-  if (!trip) throw new Error('Missing trip payload');
-  var sh = getOrCreateSheet_(SHEET_TRIPS);
-  var values = sh.getDataRange().getValues();
-  var header = values[0];
-  var idxRemote = header.indexOf('remoteId');
-  var idxLocal = header.indexOf('localId');
-
-  var remoteId = trip.remoteId || '';
-  var targetRow = -1;
-  for (var r = 1; r < values.length; r++) {
-    if ((remoteId && String(values[r][idxRemote]) === String(remoteId)) ||
-        (trip.localId && String(values[r][idxLocal]) === String(trip.localId))) {
-      targetRow = r + 1; // 1-based sheet row
-      remoteId = values[r][idxRemote] || remoteId;
-      break;
-    }
-  }
-  if (!remoteId) remoteId = 'T' + Date.now() + Math.floor(Math.random() * 1000);
-
-  var rowData = COLUMNS.map(function (col) {
-    if (col === 'remoteId') return remoteId;
-    var v = trip[col];
-    if (Array.isArray(v)) return v.join(',');
-    return v == null ? '' : v;
-  });
-
-  if (targetRow === -1) {
-    sh.appendRow(rowData);
-  } else {
-    sh.getRange(targetRow, 1, 1, COLUMNS.length).setValues([rowData]);
-  }
-  return remoteId;
-}
-
-function deleteTrip_(remoteId) {
-  if (!remoteId) throw new Error('Missing remoteId');
-  var sh = getOrCreateSheet_(SHEET_TRIPS);
-  var values = sh.getDataRange().getValues();
-  var header = values[0];
-  var idxRemote = header.indexOf('remoteId');
-  for (var r = values.length - 1; r >= 1; r--) {
-    if (String(values[r][idxRemote]) === String(remoteId)) {
-      sh.deleteRow(r + 1);
-      return true;
-    }
-  }
-  return false;
-}
-
-/* ── Drive media handling ─────────────────────────────────────────────── */
-
-/**
- * Decode a base64 image, store it in
- *   Drive / Travel_App_Media / <folder> / <name>
- * make it publicly viewable, and append its URL to the matching trip row's
- * `photos` cell. Returns the public sharing URL.
- *
- * @param {string} localId   trip local id (to attach the URL to its row)
- * @param {{name,mimeType,base64,folder}} image
- */
-function uploadMedia_(localId, image) {
-  if (!image || !image.base64) throw new Error('Missing image payload');
-
-  var root = getOrCreateFolder_(DriveApp.getRootFolder(), DRIVE_ROOT);
-  var folderName = image.folder || ('misc_' + new Date().toISOString().slice(0, 10));
-  var folder = getOrCreateFolder_(root, folderName);
-
-  var raw = image.base64.indexOf('base64,') >= 0
-    ? image.base64.split('base64,')[1]
-    : image.base64;
-  var bytes = Utilities.base64Decode(raw);
-  var blob = Utilities.newBlob(bytes, image.mimeType || 'image/jpeg', image.name || ('photo_' + Date.now() + '.jpg'));
-
-  var file = folder.createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-
-  // Direct-view thumbnail URL that renders in <img>.
-  var url = 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w1000';
-
-  if (localId) appendPhotoToRow_(localId, url, folderName);
-  return url;
-}
-
-function appendPhotoToRow_(localId, url, folderName) {
-  var sh = getOrCreateSheet_(SHEET_TRIPS);
-  var values = sh.getDataRange().getValues();
-  var header = values[0];
-  var idxLocal = header.indexOf('localId');
-  var idxPhotos = header.indexOf('photos');
-  var idxFolder = header.indexOf('driveFolder');
-  for (var r = 1; r < values.length; r++) {
-    if (String(values[r][idxLocal]) === String(localId)) {
-      var existing = values[r][idxPhotos] ? String(values[r][idxPhotos]).split(',').filter(String) : [];
-      existing.push(url);
-      sh.getRange(r + 1, idxPhotos + 1).setValue(existing.join(','));
-      if (folderName) sh.getRange(r + 1, idxFolder + 1).setValue(folderName);
-      return;
-    }
-  }
-}
-
-function getOrCreateFolder_(parent, name) {
-  var it = parent.getFoldersByName(name);
-  return it.hasNext() ? it.next() : parent.createFolder(name);
-}
-
-/* ── Utils ────────────────────────────────────────────────────────────── */
-
-function splitCsv_(v) {
-  if (v == null || v === '') return [];
-  if (Array.isArray(v)) return v;
-  return String(v).split(',').map(function (s) { return s.trim(); }).filter(String);
-}
-
-function toIso_(v) {
-  if (!v) return '';
+// Dates come back as JS Date objects; normalise to YYYY-MM-DD strings.
+function formatCell(v) {
   if (Object.prototype.toString.call(v) === '[object Date]') {
     return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   }
-  return String(v);
+  return v === null || v === undefined ? '' : String(v);
 }
 
-function json_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+// ── HTTP entry points ────────────────────────────────────────────────────────
+function doGet(e) {
+  try {
+    var action = (e && e.parameter && e.parameter.action) || 'getAll';
+    if (action === 'getAll') {
+      var trips = readObjects(getSheet(TRIPS_TAB, TRIP_HEADERS), TRIP_HEADERS);
+      var holidays = readObjects(getSheet(HOLIDAYS_TAB, HOLIDAY_HEADERS), HOLIDAY_HEADERS);
+      return json({ trips: trips, holidays: holidays });
+    }
+    return json({ error: 'Unknown action: ' + action });
+  } catch (err) {
+    return json({ error: String(err) });
+  }
+}
+
+function doPost(e) {
+  try {
+    var body = JSON.parse(e.postData.contents);
+    switch (body.action) {
+      case 'saveTrip':
+        return json({ trip: saveTrip(body.trip) });
+      case 'deleteTrip':
+        return json({ deleted: deleteTrip(body.id) });
+      case 'uploadImage':
+        return json({ url: uploadImage(body) });
+      case 'syncFolder':
+        return json(syncFolder(body));
+      default:
+        return json({ error: 'Unknown action: ' + body.action });
+    }
+  } catch (err) {
+    return json({ error: String(err) });
+  }
+}
+
+function json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(
+    ContentService.MimeType.JSON
+  );
+}
+
+// ── Trip upsert / delete ─────────────────────────────────────────────────────
+function findRowById(sheet, id) {
+  var numRows = sheet.getLastRow() - 1; // exclude header
+  if (numRows < 1) return -1; // header-only / empty sheet — nothing to scan
+  var ids = sheet.getRange(2, 1, numRows, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) return i + 2; // 1-based + header
+  }
+  return -1;
+}
+
+function tripToRow(trip) {
+  return TRIP_HEADERS.map(function (h) {
+    return trip[h] === undefined || trip[h] === null ? '' : trip[h];
+  });
+}
+
+function saveTrip(trip) {
+  var sheet = getSheet(TRIPS_TAB, TRIP_HEADERS);
+  if (!trip.ID) trip.ID = 't_' + Date.now();
+  var row = findRowById(sheet, trip.ID);
+  var values = tripToRow(trip);
+  if (row === -1) {
+    sheet.appendRow(values);
+  } else {
+    sheet.getRange(row, 1, 1, TRIP_HEADERS.length).setValues([values]);
+  }
+  return trip;
+}
+
+function deleteTrip(id) {
+  var sheet = getSheet(TRIPS_TAB, TRIP_HEADERS);
+  var row = findRowById(sheet, id);
+  if (row !== -1) sheet.deleteRow(row);
+  return id;
+}
+
+// ── Drive media archiving ────────────────────────────────────────────────────
+/** Get-or-create a folder by name under `parent` (or root). */
+function getOrCreateFolder(name, parent) {
+  var scope = parent || DriveApp.getRootFolder();
+  var it = scope.getFoldersByName(name);
+  return it.hasNext() ? it.next() : scope.createFolder(name);
+}
+
+/** Pull a Drive folder ID out of a folder URL (…/folders/<ID>). */
+function folderIdFromUrl(url) {
+  if (!url) return null;
+  var m = String(url).match(/folders\/([A-Za-z0-9_\-]+)/);
+  return m ? m[1] : null;
+}
+
+/** Resolve the parent folder: the user-configured root, else Travel_App_Media. */
+function resolveRoot(rootFolderId) {
+  if (rootFolderId) {
+    try { return DriveApp.getFolderById(rootFolderId); } catch (e) { /* fall through */ }
+  }
+  return getOrCreateFolder(MEDIA_ROOT);
+}
+
+/** Per-trip sub-folder name: "<City>_<YYYY-MM>" (location + month-year). */
+function tripFolderName(city, startDate) {
+  var c = (city || 'Trip').replace(/[^\w\- ]/g, '').trim() || 'Trip';
+  var ym = (startDate || '').slice(0, 7) || 'undated';
+  return c + '_' + ym;
+}
+
+/**
+ * Archive one image into <root>/<City>_<YYYY-MM>/, make it publicly viewable,
+ * append the share URL to the trip's Photo_URLs cell, and return the URL.
+ * `body.rootFolderId` (from Settings) is the parent; falls back to Travel_App_Media.
+ * Called once per image (sequential queue) to stay under execution limits.
+ */
+function uploadImage(body) {
+  var root = resolveRoot(body.rootFolderId);
+  var folder = getOrCreateFolder(tripFolderName(body.city, body.startDate), root);
+
+  var bytes = Utilities.base64Decode(body.base64);
+  var blob = Utilities.newBlob(bytes, body.mime || 'image/jpeg',
+    'photo_' + Date.now() + '.jpg');
+  var file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  // Embeddable image URL usable directly in <img src>.
+  // NOTE: the older `drive.google.com/uc?export=view&id=` link returns image
+  // bytes to a server-side fetch but is BLOCKED from <img> embedding in a
+  // browser (Google sends framing/disposition headers that fail the load).
+  // The lh3 host renders reliably cross-origin. Append `=w1000` for a sized variant.
+  var url = 'https://lh3.googleusercontent.com/d/' + file.getId();
+
+  // Write back the folder URL + append the photo URL onto the trip row.
+  var sheet = getSheet(TRIPS_TAB, TRIP_HEADERS);
+  var row = findRowById(sheet, body.tripId);
+  if (row !== -1) {
+    var folderCol = TRIP_HEADERS.indexOf('Drive_Folder_URL') + 1;
+    var photoCol = TRIP_HEADERS.indexOf('Photo_URLs') + 1;
+    sheet.getRange(row, folderCol).setValue(folder.getUrl());
+    var existing = String(sheet.getRange(row, photoCol).getValue() || '').trim();
+    var merged = existing ? existing + ', ' + url : url;
+    sheet.getRange(row, photoCol).setValue(merged);
+  }
+  return url;
+}
+
+/**
+ * Re-read a trip's Drive folder and make the gallery mirror it. Lists every image
+ * in the folder (resolved from the stored folder URL, or derived as
+ * <root>/<City>_<YYYY-MM>/), ensures each is link-viewable (so photos the user
+ * dropped into the folder by hand also become public), rewrites the row's
+ * Photo_URLs to match, and returns the URLs.
+ *   body = { id, folderUrl, rootFolderId, city, startDate }
+ */
+function syncFolder(body) {
+  var folder = null;
+  var fid = folderIdFromUrl(body.folderUrl);
+  if (fid) {
+    try { folder = DriveApp.getFolderById(fid); } catch (e) { folder = null; }
+  }
+  if (!folder) {
+    // No stored folder — try to locate the derived sub-folder under the root.
+    var root = resolveRoot(body.rootFolderId);
+    var name = tripFolderName(body.city, body.startDate);
+    var it = root.getFoldersByName(name);
+    if (it.hasNext()) folder = it.next();
+  }
+  if (!folder) return { urls: [], folderUrl: '' };
+
+  var files = folder.getFiles();
+  var urls = [];
+  while (files.hasNext()) {
+    var f = files.next();
+    if (f.getMimeType().indexOf('image/') === 0) {
+      try {
+        f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (e) { /* may already be shared or be a shortcut */ }
+      urls.push('https://lh3.googleusercontent.com/d/' + f.getId());
+    }
+  }
+
+  // Mirror the folder contents into the sheet row.
+  if (body.id) {
+    var sheet = getSheet(TRIPS_TAB, TRIP_HEADERS);
+    var row = findRowById(sheet, body.id);
+    if (row !== -1) {
+      sheet.getRange(row, TRIP_HEADERS.indexOf('Drive_Folder_URL') + 1).setValue(folder.getUrl());
+      sheet.getRange(row, TRIP_HEADERS.indexOf('Photo_URLs') + 1).setValue(urls.join(', '));
+    }
+  }
+  return { urls: urls, folderUrl: folder.getUrl() };
 }

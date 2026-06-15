@@ -1,72 +1,78 @@
 import { motion } from 'framer-motion';
-import { transitIcon } from './icons.jsx';
-import { tripDays, tripStatus } from '../lib/insights.js';
+import { fmtRange } from '../utils/dates.js';
+import { classifyTransport, tripDays, photoList } from '../utils/insights.js';
+import { TRANSPORT_ICON } from './Icons.jsx';
 
-const STATUS_STYLES = {
-  active: { ring: 'ring-2 ring-accent', chip: 'bg-accent/30 text-ink', text: 'Active now' },
-  upcoming: { ring: 'ring-1 ring-white/10', chip: 'bg-accent-2/25 text-ink', text: 'Upcoming' },
-  past: { ring: 'ring-1 ring-white/10', chip: 'bg-white/10 text-ink-soft', text: 'Past' },
-};
+// Deterministic gradient per city so cards without photos still look distinct.
+function hueFor(str = '') {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
+  return h;
+}
 
-/**
- * Interactive "City Card" with image backdrop. Uses Framer shared-layout ids so
- * tapping pops it open seamlessly into the full-screen deep dive.
- */
-export default function CityCard({ trip, onOpen }) {
-  const status = tripStatus(trip);
-  const s = STATUS_STYLES[status];
-  const modes = Array.isArray(trip.transit) ? trip.transit : trip.transit ? [trip.transit] : [];
-  const cover = (trip.photos && trip.photos[0]) || trip.coverUrl;
+export default function CityCard({ trip, status, onOpen }) {
+  const Icon = TRANSPORT_ICON[classifyTransport(trip.Transport_Mode)] || TRANSPORT_ICON.other;
+  const photos = photoList(trip);
+  const cover = photos[0];
+  const hue = hueFor(trip.City);
+  const days = tripDays(trip);
 
   return (
     <motion.button
-      layoutId={`card-${trip.localId}`}
+      layoutId={`card-${trip.ID}`}
       onClick={() => onOpen(trip)}
-      whileTap={{ scale: 0.97 }}
-      className={`group relative h-44 w-full overflow-hidden rounded-4xl text-left shadow-glass ${s.ring}`}
+      whileTap={{ scale: 0.98 }}
+      className="glass relative w-full overflow-hidden rounded-4xl p-4 text-left"
     >
-      {/* Backdrop image or gradient fallback */}
-      <motion.div layoutId={`cover-${trip.localId}`} className="absolute inset-0">
-        {cover ? (
-          <img src={cover} alt={trip.city} className="h-full w-full object-cover" loading="lazy" />
-        ) : (
-          <div className="h-full w-full bg-gradient-to-br from-accent/40 via-accent-2/20 to-black/60" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
-      </motion.div>
+      {/* Cover */}
+      <motion.div
+        layoutId={`cover-${trip.ID}`}
+        className="absolute inset-0 -z-10"
+        style={
+          cover
+            ? { backgroundImage: `url(${cover})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+            : { background: `linear-gradient(135deg, hsl(${hue} 70% 45% / 0.55), hsl(${(hue + 60) % 360} 70% 35% / 0.5))` }
+        }
+      />
+      <div className="absolute inset-0 -z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
 
-      {/* Glass info strip */}
-      <div className="absolute inset-x-0 bottom-0 p-4">
-        <div className="mb-1 flex items-center gap-2">
-          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold backdrop-blur ${s.chip}`}>
-            {s.text}
-          </span>
-          <div className="flex items-center gap-1 text-white/90">
-            {modes.slice(0, 3).map((m, i) => {
-              const Icon = transitIcon(m);
-              return <Icon key={i} className="h-4 w-4" />;
-            })}
-          </div>
-        </div>
-        <motion.h3 layoutId={`title-${trip.localId}`} className="font-display text-2xl font-bold leading-tight text-white">
-          {trip.city || 'Untitled'}
+      <div className="flex items-start justify-between">
+        <span
+          className="pill text-[10px] uppercase tracking-wide"
+          style={{
+            background:
+              status === 'active'
+                ? 'rgb(var(--accent) / 0.9)'
+                : status === 'upcoming'
+                ? 'rgb(var(--accent-2) / 0.35)'
+                : 'rgba(255,255,255,0.18)',
+            color: '#fff',
+          }}
+        >
+          {status}
+        </span>
+        <span className="glass rounded-full p-2 text-white">
+          <Icon width={18} height={18} />
+        </span>
+      </div>
+
+      <div className="mt-14 text-white">
+        <motion.h3 layoutId={`title-${trip.ID}`} className="text-2xl font-extrabold drop-shadow">
+          {trip.City}
         </motion.h3>
-        <p className="text-xs text-white/75">
-          {[trip.state, trip.country].filter(Boolean).join(' · ')}
-        </p>
-        <p className="mt-1 text-[11px] font-medium text-white/70">
-          {formatRange(trip.startDate, trip.endDate)} · {tripDays(trip)}d
-        </p>
+        <p className="text-sm font-medium text-white/80">{trip.State_Country}</p>
+        <div className="mt-1 flex items-center gap-2 text-xs text-white/70">
+          <span>{fmtRange(trip.Start_Date, trip.End_Date)}</span>
+          <span>•</span>
+          <span>{days} day{days > 1 ? 's' : ''}</span>
+          {photos.length > 0 && (
+            <>
+              <span>•</span>
+              <span>{photos.length} 📷</span>
+            </>
+          )}
+        </div>
       </div>
     </motion.button>
   );
-}
-
-function formatRange(start, end) {
-  if (!start) return '—';
-  const opts = { month: 'short', day: 'numeric' };
-  const s = new Date(start).toLocaleDateString(undefined, opts);
-  if (!end || end === start) return s;
-  const e = new Date(end).toLocaleDateString(undefined, opts);
-  return `${s} – ${e}`;
 }
