@@ -14,6 +14,18 @@ export default function Settings() {
   const [holidayDraft, setHolidayDraft] = useState(settings.holidayText);
   const parsedCount = parseHolidayText(holidayDraft).length;
 
+  // Generate a strong random shared secret and copy it for pasting into Code.gs.
+  const genKey = () => {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const key = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    updateSettings({ apiKey: key });
+    navigator.clipboard
+      ?.writeText(key)
+      .then(() => notify('Key generated & copied — paste it into Code.gs SHARED_SECRET', 'ok'))
+      .catch(() => notify('Key generated — copy it into Code.gs SHARED_SECRET', 'ok'));
+  };
+
   const setLeave = (cat, field) => (e) => {
     const val = Math.max(0, Number(e.target.value) || 0);
     updateSettings(
@@ -39,6 +51,29 @@ export default function Settings() {
             placeholder="https://script.google.com/macros/s/…/exec"
             className="glass w-full rounded-3xl px-3 py-2.5 text-sm text-ink outline-none"
           />
+        </Labeled>
+        <Labeled label="API access key (shared secret)">
+          <input
+            type="password"
+            value={settings.apiKey}
+            onChange={(e) => updateSettings({ apiKey: e.target.value })}
+            placeholder="must match SHARED_SECRET in Code.gs"
+            className="glass w-full rounded-3xl px-3 py-2.5 text-sm text-ink outline-none"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] leading-tight text-ink-dim">
+              Locks your backend so only this app can read/write your trips. Paste the same value into
+              Code.gs <code>SHARED_SECRET</code>, then redeploy.
+            </span>
+            <button
+              type="button"
+              onClick={genKey}
+              className="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold text-ink"
+              style={{ background: 'rgb(var(--accent) / 0.3)' }}
+            >
+              Generate
+            </button>
+          </div>
         </Labeled>
         <Labeled label="Master Drive folder (for trip photos)">
           <input

@@ -17,9 +17,11 @@ function withTimeout(promise, ms = TIMEOUT_MS) {
 }
 
 /** GET all rows from both tabs: { trips: [...], holidays: [...] }. */
-export async function fetchAll(baseUrl) {
+export async function fetchAll(baseUrl, token = '') {
   if (!baseUrl) throw new Error('No Apps Script URL configured');
-  const url = `${baseUrl}?action=getAll&t=${Date.now()}`;
+  // The shared secret authenticates the request (see SHARED_SECRET in Code.gs).
+  const auth = token ? `&token=${encodeURIComponent(token)}` : '';
+  const url = `${baseUrl}?action=getAll&t=${Date.now()}${auth}`;
   const res = await withTimeout(fetch(url, { method: 'GET' }));
   if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
   const data = await res.json();
@@ -27,14 +29,15 @@ export async function fetchAll(baseUrl) {
   return { trips: data.trips || [], holidays: data.holidays || [] };
 }
 
-async function post(baseUrl, payload) {
+async function post(baseUrl, payload, token = '') {
   if (!baseUrl) throw new Error('No Apps Script URL configured');
   const res = await withTimeout(
     fetch(baseUrl, {
       method: 'POST',
       // text/plain keeps this a CORS "simple request" (no preflight).
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload),
+      // The shared secret travels in the body and is checked server-side.
+      body: JSON.stringify({ ...payload, token }),
       redirect: 'follow',
     })
   );
@@ -45,11 +48,11 @@ async function post(baseUrl, payload) {
 }
 
 /** Upsert a trip row (no media). Returns { trip }. */
-export const saveTrip = (baseUrl, trip) =>
-  post(baseUrl, { action: 'saveTrip', trip });
+export const saveTrip = (baseUrl, trip, token) =>
+  post(baseUrl, { action: 'saveTrip', trip }, token);
 
-export const removeTrip = (baseUrl, id) =>
-  post(baseUrl, { action: 'deleteTrip', id });
+export const removeTrip = (baseUrl, id, token) =>
+  post(baseUrl, { action: 'deleteTrip', id }, token);
 
 /**
  * Upload ONE compressed image for a trip. The spec mandates a sequential queue
@@ -60,28 +63,37 @@ export const removeTrip = (baseUrl, id) =>
  */
 export const uploadImage = (
   baseUrl,
-  { tripId, city, startDate, base64, mime, rootFolderId }
+  { tripId, city, startDate, base64, mime, rootFolderId },
+  token
 ) =>
-  post(baseUrl, {
-    action: 'uploadImage',
-    tripId,
-    city,
-    startDate,
-    base64,
-    mime,
-    rootFolderId,
-  });
+  post(
+    baseUrl,
+    {
+      action: 'uploadImage',
+      tripId,
+      city,
+      startDate,
+      base64,
+      mime,
+      rootFolderId,
+    },
+    token
+  );
 
 /**
  * Re-sync a trip's gallery from its Drive folder (picks up photos added to the
  * folder by hand and makes them public). Returns { urls, folderUrl }.
  */
-export const syncFolder = (baseUrl, { id, folderUrl, rootFolderId, city, startDate }) =>
-  post(baseUrl, {
-    action: 'syncFolder',
-    id,
-    folderUrl,
-    rootFolderId,
-    city,
-    startDate,
-  });
+export const syncFolder = (baseUrl, { id, folderUrl, rootFolderId, city, startDate }, token) =>
+  post(
+    baseUrl,
+    {
+      action: 'syncFolder',
+      id,
+      folderUrl,
+      rootFolderId,
+      city,
+      startDate,
+    },
+    token
+  );

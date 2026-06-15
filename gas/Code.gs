@@ -24,6 +24,25 @@
 // ⬇️ EDIT THIS — or leave blank to bind to the container spreadsheet.
 var SPREADSHEET_ID = '';
 
+// ── Security ─────────────────────────────────────────────────────────────────
+// This Web App is deployed "Anyone" (no Google login) so the PWA can call it
+// without OAuth/CORS friction. That means the /exec URL alone would let anyone
+// who obtains it read or modify your trips. To prevent that, set a long random
+// shared secret here AND paste the SAME value into the PWA's
+// Settings → "API access key". Every request must carry it or it is rejected.
+//
+//   • Generate one in Settings (the "Generate" button) and copy it here.
+//   • Leaving this '' DISABLES the check (insecure — not recommended for a
+//     public deployment). The app keeps working either way.
+//   • After editing, redeploy: Deploy → Manage deployments → Edit → New version.
+var SHARED_SECRET = '';
+
+/** True when the request carries the right key (or the check is disabled). */
+function authorized(token) {
+  if (!SHARED_SECRET) return true; // check disabled — see note above
+  return String(token) === String(SHARED_SECRET);
+}
+
 var TRIPS_TAB = 'Trips';
 var HOLIDAYS_TAB = 'Holidays';
 var MEDIA_ROOT = 'Travel_App_Media';
@@ -88,6 +107,9 @@ function formatCell(v) {
 // ── HTTP entry points ────────────────────────────────────────────────────────
 function doGet(e) {
   try {
+    if (!authorized(e && e.parameter && e.parameter.token)) {
+      return json({ error: 'Unauthorized' });
+    }
     var action = (e && e.parameter && e.parameter.action) || 'getAll';
     if (action === 'getAll') {
       var trips = readObjects(getSheet(TRIPS_TAB, TRIP_HEADERS), TRIP_HEADERS);
@@ -103,6 +125,9 @@ function doGet(e) {
 function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
+    if (!authorized(body.token)) {
+      return json({ error: 'Unauthorized' });
+    }
     switch (body.action) {
       case 'saveTrip':
         return json({ trip: saveTrip(body.trip) });

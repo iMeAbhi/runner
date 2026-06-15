@@ -24,6 +24,8 @@ export const ACCENTS = {
 
 const DEFAULT_SETTINGS = {
   appsScriptUrl: '',
+  apiKey: '', // shared secret; must match SHARED_SECRET in Code.gs
+
   homeLocation: '', // where "home" really is (e.g. Kolkata) — drives "been home" insights
   currentLocation: '', // where you currently live/base out of (e.g. Hyderabad)
   birthday: '', // YYYY-MM-DD; only month/day are used for insights
@@ -149,7 +151,7 @@ export function AppProvider({ children }) {
     }
     setSyncing(true);
     try {
-      const { trips: remoteTrips } = await api.fetchAll(settings.appsScriptUrl);
+      const { trips: remoteTrips } = await api.fetchAll(settings.appsScriptUrl, settings.apiKey);
       await idb.clearTrips();
       await idb.putTrips(remoteTrips);
       setTrips(remoteTrips);
@@ -160,7 +162,7 @@ export function AppProvider({ children }) {
     } finally {
       setSyncing(false);
     }
-  }, [settings.appsScriptUrl, notify]);
+  }, [settings.appsScriptUrl, settings.apiKey, notify]);
 
   // ── Flush the offline outbox sequentially when back online ─────────────────
   const flushOutbox = useCallback(async () => {
@@ -168,14 +170,14 @@ export function AppProvider({ children }) {
     const items = (await idb.getOutbox()) || [];
     for (const item of items) {
       try {
-        if (item.type === 'saveTrip') await api.saveTrip(settings.appsScriptUrl, item.trip);
-        if (item.type === 'deleteTrip') await api.removeTrip(settings.appsScriptUrl, item.id);
+        if (item.type === 'saveTrip') await api.saveTrip(settings.appsScriptUrl, item.trip, settings.apiKey);
+        if (item.type === 'deleteTrip') await api.removeTrip(settings.appsScriptUrl, item.id, settings.apiKey);
         await idb.dequeue(item.queueId);
       } catch {
         break; // stop on first failure; retry on next online event
       }
     }
-  }, [online, settings.appsScriptUrl]);
+  }, [online, settings.appsScriptUrl, settings.apiKey]);
 
   useEffect(() => {
     if (online) flushOutbox();
@@ -200,7 +202,7 @@ export function AppProvider({ children }) {
       // Sync the row itself.
       if (online && settings.appsScriptUrl) {
         try {
-          await api.saveTrip(settings.appsScriptUrl, record);
+          await api.saveTrip(settings.appsScriptUrl, record, settings.apiKey);
         } catch {
           await idb.enqueue({ type: 'saveTrip', trip: record });
         }
@@ -216,7 +218,7 @@ export function AppProvider({ children }) {
       }
       return record;
     },
-    [online, settings.appsScriptUrl, notify]
+    [online, settings.appsScriptUrl, settings.apiKey, notify]
   );
 
   // Sequential streaming queue — strictly one file per request.
@@ -227,14 +229,18 @@ export function AppProvider({ children }) {
       for (let i = 0; i < compressedFiles.length; i++) {
         const f = compressedFiles[i];
         try {
-          const { url } = await api.uploadImage(settings.appsScriptUrl, {
-            tripId: record.ID,
-            city: record.City,
-            startDate: record.Start_Date,
-            base64: f.base64,
-            mime: f.mime,
-            rootFolderId: parseFolderId(settings.driveFolderUrl),
-          });
+          const { url } = await api.uploadImage(
+            settings.appsScriptUrl,
+            {
+              tripId: record.ID,
+              city: record.City,
+              startDate: record.Start_Date,
+              base64: f.base64,
+              mime: f.mime,
+              rootFolderId: parseFolderId(settings.driveFolderUrl),
+            },
+            settings.apiKey
+          );
           if (url) urls.push(url);
         } catch (e) {
           notify(`Image ${i + 1} failed: ${e.message}`, 'error');
@@ -255,7 +261,7 @@ export function AppProvider({ children }) {
         // Persist the URL list back to the sheet row.
         if (online) {
           try {
-            await api.saveTrip(settings.appsScriptUrl, updated);
+            await api.saveTrip(settings.appsScriptUrl, updated, settings.apiKey);
           } catch {
             await idb.enqueue({ type: 'saveTrip', trip: updated });
           }
@@ -263,7 +269,7 @@ export function AppProvider({ children }) {
         notify(`${urls.length} photo(s) uploaded`, 'ok');
       }
     },
-    [settings.appsScriptUrl, online, notify]
+    [settings.appsScriptUrl, settings.apiKey, online, notify]
   );
 
   const deleteTrip = useCallback(
@@ -272,7 +278,7 @@ export function AppProvider({ children }) {
       setTrips((prev) => prev.filter((t) => t.ID !== id));
       if (online && settings.appsScriptUrl) {
         try {
-          await api.removeTrip(settings.appsScriptUrl, id);
+          await api.removeTrip(settings.appsScriptUrl, id, settings.apiKey);
         } catch {
           await idb.enqueue({ type: 'deleteTrip', id });
         }
@@ -280,7 +286,7 @@ export function AppProvider({ children }) {
         await idb.enqueue({ type: 'deleteTrip', id });
       }
     },
-    [online, settings.appsScriptUrl]
+    [online, settings.appsScriptUrl, settings.apiKey]
   );
 
   // ── Refresh a trip's gallery from its Drive folder ─────────────────────────
@@ -290,13 +296,17 @@ export function AppProvider({ children }) {
     async (trip) => {
       if (!online || !settings.appsScriptUrl) return null;
       try {
-        const { urls } = await api.syncFolder(settings.appsScriptUrl, {
-          id: trip.ID,
-          folderUrl: trip.Drive_Folder_URL,
-          rootFolderId: parseFolderId(settings.driveFolderUrl),
-          city: trip.City,
-          startDate: trip.Start_Date,
-        });
+        const { urls } = await api.syncFolder(
+          settings.appsScriptUrl,
+          {
+            id: trip.ID,
+            folderUrl: trip.Drive_Folder_URL,
+            rootFolderId: parseFolderId(settings.driveFolderUrl),
+            city: trip.City,
+            startDate: trip.Start_Date,
+          },
+          settings.apiKey
+        );
         if (!urls) return null;
         const merged = urls.join(', ');
         if (merged !== (trip.Photo_URLs || '')) {
@@ -309,7 +319,7 @@ export function AppProvider({ children }) {
         return null; // offline / transient — keep showing whatever we have
       }
     },
-    [online, settings.appsScriptUrl, settings.driveFolderUrl]
+    [online, settings.appsScriptUrl, settings.apiKey, settings.driveFolderUrl]
   );
 
   // ── Manual JSON backup export ──────────────────────────────────────────────
