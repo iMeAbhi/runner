@@ -31,12 +31,10 @@ jobs:
       - name: Build
         run: npm run build
       - name: Configure Pages
-        # enablement switches the Pages source to "GitHub Actions" automatically
-        # (the repo was previously on "Deploy from a branch"). Requires the
-        # default GITHUB_TOKEN to have the pages permission, granted above.
+        # Reads the Pages config. Requires repo Settings → Pages → Source set to
+        # "GitHub Actions" (one-time, by a repo admin). Auto-enable was removed
+        # because the default CI token lacks permission to change that setting.
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
