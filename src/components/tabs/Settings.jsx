@@ -40,14 +40,6 @@ export default function Settings() {
             className="glass w-full rounded-3xl px-3 py-2.5 text-sm text-ink outline-none"
           />
         </Labeled>
-        <Labeled label="Home location (routing base)">
-          <input
-            value={settings.homeLocation}
-            onChange={(e) => updateSettings({ homeLocation: e.target.value })}
-            placeholder="Hyderabad"
-            className="glass w-full rounded-3xl px-3 py-2.5 text-sm text-ink outline-none"
-          />
-        </Labeled>
         <Labeled label="Master Drive folder (for trip photos)">
           <input
             value={settings.driveFolderUrl}
@@ -62,6 +54,35 @@ export default function Settings() {
         <button onClick={refreshFromSheet} className="w-full rounded-3xl py-2.5 text-sm font-bold text-ink" style={{ background: 'rgb(var(--accent) / 0.3)' }}>
           Test & sync now
         </button>
+      </Section>
+
+      {/* Personal anchors — power the home / New Year / birthday insights */}
+      <Section title="You & your places">
+        <Labeled label="Home town (where 'going home' means)">
+          <input
+            value={settings.homeLocation}
+            onChange={(e) => updateSettings({ homeLocation: e.target.value })}
+            placeholder="e.g. Kolkata"
+            className="glass w-full rounded-3xl px-3 py-2.5 text-sm text-ink outline-none"
+          />
+        </Labeled>
+        <Labeled label="Current location (where you live now)">
+          <input
+            value={settings.currentLocation}
+            onChange={(e) => updateSettings({ currentLocation: e.target.value })}
+            placeholder="e.g. Hyderabad"
+            className="glass w-full rounded-3xl px-3 py-2.5 text-sm text-ink outline-none"
+          />
+        </Labeled>
+        <Labeled label="Birthday (for countdowns & 'birthdays away' insights)">
+          <input
+            type="date"
+            value={settings.birthday}
+            onChange={(e) => updateSettings({ birthday: e.target.value })}
+            className="glass w-full rounded-3xl px-3 py-2.5 text-sm text-ink outline-none"
+          />
+          <span className="text-[10px] text-ink-dim">Only the month &amp; day are used — the year is ignored.</span>
+        </Labeled>
       </Section>
 
       {/* Theme */}

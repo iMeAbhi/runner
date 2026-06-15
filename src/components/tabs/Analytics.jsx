@@ -6,6 +6,9 @@ import {
   filterByMonths,
   filterByRange,
   indiaCoverage,
+  placeVisits,
+  newYearInsight,
+  birthdayInsight,
 } from '../../utils/insights.js';
 import { fmtRange } from '../../utils/dates.js';
 
@@ -20,7 +23,7 @@ const FILTERS = [
 ];
 
 export default function Analytics() {
-  const { trips } = useApp();
+  const { trips, settings } = useApp();
   const [filter, setFilter] = useState('1y');
   const [range, setRange] = useState({ start: '', end: '' });
 
@@ -35,6 +38,12 @@ export default function Analytics() {
 
   const stats = useMemo(() => computeStats(filtered), [filtered]);
   const coverage = useMemo(() => indiaCoverage(trips), [trips]); // coverage is lifetime
+
+  // Life-moment insights are inherently lifetime, so they ignore the date filter.
+  const home = useMemo(() => placeVisits(trips, settings.homeLocation), [trips, settings.homeLocation]);
+  const current = useMemo(() => placeVisits(trips, settings.currentLocation), [trips, settings.currentLocation]);
+  const newYear = useMemo(() => newYearInsight(trips, settings), [trips, settings]);
+  const bday = useMemo(() => birthdayInsight(trips, settings), [trips, settings]);
 
   return (
     <div className="space-y-5">
@@ -73,11 +82,16 @@ export default function Analytics() {
       {/* Metrics grid — re-animates whenever the filter morphs the dataset */}
       <motion.div key={filter + filtered.length} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className="grid grid-cols-2 gap-3">
         <Stat big value={stats.uniqueCities} label="Cities" />
-        <Stat big value={stats.uniqueRegions} label="States / Countries" />
+        <Stat big value={stats.uniqueStates} label="Indian States & UTs" />
+        <Stat value={stats.uniqueCountries} label="Countries 🌍" />
+        <Stat value={stats.hotels} label="Hotel stays 🏨" />
         <Stat value={stats.flights} label="Flights ✈️" />
         <Stat value={stats.trains} label="Trains 🚆" />
         <Stat value={stats.cabs} label="Road trips 🚗" />
-        <Stat value={stats.hotels} label="Hotel stays 🏨" />
+        <Stat
+          value={stats.topMode ? stats.topMode.count : 0}
+          label={stats.topMode ? `Most used · ${stats.topMode.label}` : 'Most-used ride'}
+        />
       </motion.div>
 
       {/* Duration + frequency */}
@@ -107,6 +121,66 @@ export default function Analytics() {
         </div>
       </div>
 
+      {/* Life moments — home base, New Year's & birthday (lifetime, not filtered) */}
+      {(home || current || newYear.celebrations.length > 0 || bday) && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-ink-dim">Life moments</h2>
+
+          {(home || current) && (
+            <div className="grid grid-cols-2 gap-3">
+              {home && (
+                <Moment
+                  title={`🏠 Home · ${home.place}`}
+                  big={`${home.visits} trip${home.visits === 1 ? '' : 's'} home`}
+                  sub={
+                    home.daysSince == null
+                      ? 'No home visits logged yet'
+                      : home.daysSince === 0
+                      ? 'You’re home right now 💛'
+                      : `Last home ${home.daysSince} day${home.daysSince === 1 ? '' : 's'} ago`
+                  }
+                />
+              )}
+              {current && (
+                <Moment
+                  title={`📍 Based in · ${current.place}`}
+                  big={`${current.visits} logged stay${current.visits === 1 ? '' : 's'}`}
+                  sub={current.totalDays ? `${current.totalDays} nights tracked here` : 'Your current base'}
+                />
+              )}
+            </div>
+          )}
+
+          {newYear.celebrations.length > 0 && (
+            <Moment
+              title="🎆 New Year’s Eve"
+              big={
+                newYear.awayCount > 0
+                  ? `${newYear.awayCount} New Year${newYear.awayCount === 1 ? '' : 's'} away`
+                  : 'Always close to base'
+              }
+              sub={
+                newYear.topAwayCity
+                  ? `Favourite NYE escape: ${newYear.topAwayCity.name}${newYear.topAwayCity.count > 1 ? ` (${newYear.topAwayCity.count}×)` : ''}`
+                  : `Logged ${newYear.celebrations.length} New Year${newYear.celebrations.length === 1 ? '' : 's'} in ${newYear.celebrations[0].city}`
+              }
+            />
+          )}
+
+          {bday && (
+            <Moment
+              title="🎂 Birthday"
+              big={bday.daysUntil === 0 ? 'Happy birthday! 🎉' : `${bday.daysUntil} day${bday.daysUntil === 1 ? '' : 's'} to go`}
+              sub={
+                bday.awayCount > 0
+                  ? `You’ve spent ${bday.awayCount} birthday${bday.awayCount === 1 ? '' : 's'} away${bday.topAwayCity ? `, most in ${bday.topAwayCity.name}` : ''}. Plan a trip?`
+                  : 'No birthdays away from home yet — plan one?'
+              }
+            />
+          )}
+        </div>
+      )}
+
       {/* India coverage wheel */}
       <div className="glass rounded-4xl p-4">
         <div className="flex items-center gap-4">
@@ -127,6 +201,16 @@ export default function Analytics() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function Moment({ title, big, sub }) {
+  return (
+    <div className="glass rounded-4xl p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-dim">{title}</p>
+      <p className="mt-1 text-lg font-bold text-ink">{big}</p>
+      {sub && <p className="text-xs text-ink-dim">{sub}</p>}
     </div>
   );
 }

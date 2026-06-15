@@ -2,14 +2,26 @@
 // every function takes data in and returns plain values so they're trivial to
 // test and reuse across the Timeline, Analytics and Planner tabs.
 
-import { parseISO, isWeekend, addDays, daysBetween, startOfToday } from './dates.js';
+import { parseISO, toISO, isWeekend, addDays, daysBetween, startOfToday } from './dates.js';
 import { matchRegion, INDIA_STATES, TOTAL_INDIA_REGIONS } from '../data/indiaStates.js';
 
 const MODE = {
   flight: ['flight', 'plane', 'air', 'fly'],
   train: ['train', 'rail'],
-  cab: ['cab', 'car', 'taxi', 'drive', 'bus', 'road'],
+  bus: ['bus', 'coach'],
+  // "Cab" was renamed to "Car" — every car/road ride is treated as a road trip.
+  cab: ['car', 'cab', 'taxi', 'drive', 'road'],
   walk: ['walk', 'trek', 'hike'],
+};
+
+// Human-friendly labels for each classified mode (used in the "favourite ride").
+export const MODE_LABEL = {
+  flight: 'Flights ✈️',
+  train: 'Trains 🚆',
+  bus: 'Bus trips 🚌',
+  cab: 'Road trips 🚗',
+  walk: 'On foot 🥾',
+  other: 'Other 📍',
 };
 
 export function classifyTransport(mode = '') {
@@ -52,9 +64,13 @@ export function filterByRange(trips, startISO, endISO) {
 /** Volumetric + duration + frequency metrics for a (filtered) trip set. */
 export function computeStats(trips) {
   const cities = new Set();
-  const countries = new Set();
   const cityCount = {};
   const regionCount = {};
+  // States/UTs and foreign countries are genuinely different things, so we
+  // tally them separately rather than lumping into one "States/Countries".
+  const indianRegions = new Set();
+  const foreignCountries = new Set();
+  const modeCounts = {};
   let flights = 0;
   let trains = 0;
   let cabs = 0;
@@ -67,11 +83,14 @@ export function computeStats(trips) {
       cityCount[t.City.trim()] = (cityCount[t.City.trim()] || 0) + 1;
     }
     if (t.State_Country) {
-      countries.add(t.State_Country.trim().toLowerCase());
       regionCount[t.State_Country.trim()] =
         (regionCount[t.State_Country.trim()] || 0) + 1;
+      const region = matchRegion(`${t.State_Country} ${t.City || ''}`);
+      if (region) indianRegions.add(region);
+      else foreignCountries.add(t.State_Country.trim().toLowerCase());
     }
     const mode = classifyTransport(t.Transport_Mode);
+    modeCounts[mode] = (modeCounts[mode] || 0) + 1;
     if (mode === 'flight') flights++;
     if (mode === 'train') trains++;
     if (mode === 'cab') cabs++;
@@ -82,10 +101,16 @@ export function computeStats(trips) {
     if (!longest || len > longest.days) longest = { trip: t, days: len };
   }
 
+  const topModeEntry = topEntry(modeCounts);
+
   return {
     totalTrips: trips.length,
     uniqueCities: cities.size,
-    uniqueRegions: countries.size,
+    // Distinct Indian States & UTs visited.
+    uniqueStates: indianRegions.size,
+    // Distinct countries: every foreign country, plus India itself if any
+    // domestic (state-matched) trip exists.
+    uniqueCountries: foreignCountries.size + (indianRegions.size > 0 ? 1 : 0),
     flights,
     trains,
     cabs,
@@ -93,6 +118,10 @@ export function computeStats(trips) {
     longest,
     topCity: topEntry(cityCount),
     topRegion: topEntry(regionCount),
+    topMode: topModeEntry
+      ? { ...topModeEntry, label: MODE_LABEL[topModeEntry.name] || topModeEntry.name }
+      : null,
+    modeCounts,
     totalDays: trips.reduce((a, t) => a + tripDays(t), 0),
   };
 }
@@ -190,4 +219,121 @@ export function daysSinceLastTrip(trips) {
     .sort((a, b) => (a.End_Date < b.End_Date ? 1 : -1));
   if (!past.length) return null;
   return daysBetween(past[0].End_Date, startOfToday());
+}
+
+// ── Home / current-location & life-moment insights ──────────────────────────
+
+const norm = (s) => (s || '').trim().toLowerCase();
+
+/** Classify a trip's city relative to the user's home / current base. */
+export function locationClass(city, settings = {}) {
+  const c = norm(city);
+  if (!c) return 'away';
+  if (settings.homeLocation && c === norm(settings.homeLocation)) return 'home';
+  if (settings.currentLocation && c === norm(settings.currentLocation)) return 'current';
+  return 'away';
+}
+
+/** The trip whose date range contains a given ISO date (or null). */
+function tripCovering(trips, dateISO) {
+  const d = parseISO(dateISO);
+  return (
+    trips.find(
+      (t) =>
+        t.Start_Date &&
+        t.End_Date &&
+        parseISO(t.Start_Date) <= d &&
+        parseISO(t.End_Date) >= d
+    ) || null
+  );
+}
+
+/**
+ * Visit stats for a named place (matched against trip City): how many logged
+ * trips went there, total nights, and how long since the last one.
+ */
+export function placeVisits(trips, place) {
+  const key = norm(place);
+  if (!key) return null;
+  const matches = trips
+    .filter((t) => norm(t.City) === key && t.End_Date)
+    .sort((a, b) => (a.End_Date < b.End_Date ? 1 : -1));
+  const past = matches.filter((t) => parseISO(t.End_Date) <= startOfToday());
+  return {
+    place,
+    visits: matches.length,
+    totalDays: matches.reduce((a, t) => a + tripDays(t), 0),
+    lastDate: past[0]?.End_Date || null,
+    daysSince: past[0] ? daysBetween(past[0].End_Date, startOfToday()) : null,
+  };
+}
+
+/**
+ * Where New Year's was spent: scans trips that span a Jan 1, tallies the city
+ * for each year and highlights the years celebrated away from home/current.
+ */
+export function newYearInsight(trips, settings = {}) {
+  const today = startOfToday();
+  const seen = new Set();
+  const cityCount = {};
+  const celebrations = [];
+  let awayCount = 0;
+  for (const t of trips) {
+    if (!t.Start_Date || !t.End_Date) continue;
+    const s = parseISO(t.Start_Date);
+    const e = parseISO(t.End_Date);
+    for (let y = s.getFullYear(); y <= e.getFullYear(); y++) {
+      if (seen.has(y)) continue;
+      const ny = parseISO(`${y}-01-01`);
+      if (ny < s || ny > e || ny > today) continue;
+      seen.add(y);
+      const cls = locationClass(t.City, settings);
+      celebrations.push({ year: y, city: t.City, cls });
+      if (cls === 'away') {
+        awayCount++;
+        cityCount[t.City.trim()] = (cityCount[t.City.trim()] || 0) + 1;
+      }
+    }
+  }
+  celebrations.sort((a, b) => b.year - a.year);
+  return { celebrations, awayCount, topAwayCity: topEntry(cityCount) };
+}
+
+/**
+ * Birthday insight: days until the next birthday, plus where past birthdays
+ * were spent (highlighting the ones away from home/current).
+ * Returns null until a birthday is configured.
+ */
+export function birthdayInsight(trips, settings = {}) {
+  if (!settings.birthday) return null;
+  const [, mm, dd] = settings.birthday.split('-');
+  if (!mm || !dd) return null;
+
+  const today = startOfToday();
+  let next = parseISO(`${today.getFullYear()}-${mm}-${dd}`);
+  if (next < today) next = parseISO(`${today.getFullYear() + 1}-${mm}-${dd}`);
+  const daysUntil = daysBetween(today, next);
+
+  const cityCount = {};
+  const celebrations = [];
+  let awayCount = 0;
+  const years = new Set();
+  for (const t of trips) {
+    if (t.Start_Date) years.add(parseISO(t.Start_Date).getFullYear());
+    if (t.End_Date) years.add(parseISO(t.End_Date).getFullYear());
+  }
+  for (const y of years) {
+    const bday = parseISO(`${y}-${mm}-${dd}`);
+    if (bday > today) continue;
+    const trip = tripCovering(trips, `${y}-${mm}-${dd}`);
+    if (!trip) continue;
+    const cls = locationClass(trip.City, settings);
+    celebrations.push({ year: y, city: trip.City, cls });
+    if (cls === 'away') {
+      awayCount++;
+      cityCount[trip.City.trim()] = (cityCount[trip.City.trim()] || 0) + 1;
+    }
+  }
+  celebrations.sort((a, b) => b.year - a.year);
+  return { daysUntil, nextDate: toISO(next), awayCount, topAwayCity: topEntry(cityCount), celebrations };
 }

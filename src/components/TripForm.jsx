@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useApp } from '../context/AppContext.jsx';
 import { compressMany } from '../utils/imageCompress.js';
 import { CITY_NAMES, regionForCity } from '../data/cities.js';
-import { CloseIcon } from './Icons.jsx';
+import { CloseIcon, CalendarIcon } from './Icons.jsx';
+import { parseISO, toISO } from '../utils/dates.js';
 
-const MODES = ['Flight', 'Train', 'Cab', 'Bus', 'Walk'];
+// "Car" replaces the old "Cab" — every car ride is logged as a road trip.
+const MODES = ['Flight', 'Train', 'Car', 'Bus', 'Walk'];
 const empty = {
   City: '',
   State_Country: '',
@@ -29,6 +31,16 @@ export default function TripForm({ initial, onClose }) {
   const [autoRegion, setAutoRegion] = useState('');
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  // Picking a start date pre-fills the end date to the same day (when empty or
+  // earlier), so the End calendar opens on the start month instead of today.
+  const setStart = (iso) =>
+    setForm((f) => {
+      const next = { ...f, Start_Date: iso };
+      if (!f.End_Date || f.End_Date < iso) next.End_Date = iso;
+      return next;
+    });
+  const setEnd = (iso) => setForm((f) => ({ ...f, End_Date: iso }));
 
   const onCityChange = (e) => {
     const City = e.target.value;
@@ -101,8 +113,8 @@ export default function TripForm({ initial, onClose }) {
         <div className="grid grid-cols-2 gap-3">
           <Field className="col-span-2" label="City" value={form.City} onChange={onCityChange} list="city-suggestions" placeholder="Start typing… e.g. Leh" autoComplete="off" />
           <Field className="col-span-2" label="State / Country (auto-fills)" value={form.State_Country} onChange={set('State_Country')} placeholder="e.g. Ladakh" />
-          <Field type="date" label="Start" value={form.Start_Date} onChange={set('Start_Date')} />
-          <Field type="date" label="End" value={form.End_Date} onChange={set('End_Date')} />
+          <DateField label="Start" value={form.Start_Date} onChange={setStart} />
+          <DateField label="End" value={form.End_Date} onChange={setEnd} min={form.Start_Date} />
 
           <label className="col-span-2 flex flex-col gap-1 text-xs font-semibold text-ink-dim">
             Transport
@@ -150,6 +162,116 @@ export default function TripForm({ initial, onClose }) {
         </button>
       </motion.form>
     </motion.div>
+  );
+}
+
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/** Format an ISO date as a friendly, typable string e.g. "04 Jun 2023". */
+function fmtTyped(iso) {
+  if (!iso) return '';
+  const d = parseISO(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()].replace(/^./, (c) => c.toUpperCase())} ${d.getFullYear()}`;
+}
+
+/**
+ * Loosely parse a hand-typed date into ISO (YYYY-MM-DD), or '' if unparseable.
+ * Accepts: 2023-06-04, 04/06/2023, 4-6-2023, "4 Jun 2023", "June 4 2023".
+ */
+function parseTyped(raw) {
+  const s = (raw || '').trim().toLowerCase();
+  if (!s) return '';
+  // ISO first.
+  const iso = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (iso) return mk(+iso[1], +iso[2], +iso[3]);
+  // Month name anywhere (e.g. "4 jun 2023" or "june 4 2023").
+  const monIdx = MONTHS.findIndex((m) => s.includes(m));
+  if (monIdx !== -1) {
+    const nums = s.match(/\d+/g) || [];
+    const day = nums.find((n) => +n >= 1 && +n <= 31);
+    const year = nums.find((n) => n.length === 4) || nums.find((n) => +n > 31);
+    if (day && year) return mk(+year, monIdx + 1, +day);
+  }
+  // Numeric DD MM YYYY (day-first, common in India).
+  const parts = s.split(/[-/. ]+/).filter(Boolean);
+  if (parts.length === 3 && parts.every((p) => /^\d+$/.test(p))) {
+    let [d, m, y] = parts.map(Number);
+    if (y < 100) y += 2000;
+    return mk(y, m, d);
+  }
+  return '';
+}
+
+function mk(y, m, d) {
+  if (!y || !m || !d || m < 1 || m > 12 || d < 1 || d > 31) return '';
+  return toISO(new Date(y, m - 1, d));
+}
+
+/**
+ * Date input you can either type into ("4 Jun 2023") or pick from the native
+ * calendar (📅 button → showPicker). Typing avoids scrolling the calendar back
+ * years; the calendar respects `min` so the End date can't precede the Start.
+ */
+function DateField({ label, value, onChange, min, className = 'col-span-1' }) {
+  const ref = useRef(null);
+  const [text, setText] = useState(fmtTyped(value));
+  // Re-sync the text whenever the canonical value changes from outside (e.g.
+  // Start auto-filling End, or the calendar picker).
+  useEffect(() => setText(fmtTyped(value)), [value]);
+
+  const commit = () => {
+    const iso = parseTyped(text);
+    if (iso) onChange(iso);
+    else setText(fmtTyped(value)); // revert unparseable input
+  };
+
+  return (
+    <label className={`flex flex-col gap-1 text-xs font-semibold text-ink-dim ${className}`}>
+      {label}
+      <div className="glass flex items-center rounded-3xl px-3 py-2.5 focus-within:shadow-glow">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commit();
+            }
+          }}
+          placeholder="04 Jun 2023"
+          className="min-w-0 flex-1 bg-transparent text-sm font-medium text-ink outline-none placeholder:text-ink-dim/60"
+        />
+        <button
+          type="button"
+          aria-label="Open calendar"
+          onClick={() => {
+            try {
+              ref.current.showPicker();
+            } catch {
+              ref.current.focus();
+            }
+          }}
+          className="ml-1 shrink-0 text-ink-dim transition-colors hover:text-ink"
+        >
+          <CalendarIcon width={18} height={18} />
+        </button>
+        {/* Visually hidden native picker; the button above opens it. */}
+        <input
+          ref={ref}
+          type="date"
+          value={value || ''}
+          min={min || undefined}
+          onChange={(e) => e.target.value && onChange(e.target.value)}
+          tabIndex={-1}
+          aria-hidden="true"
+          className="pointer-events-none absolute h-0 w-0 opacity-0"
+        />
+      </div>
+    </label>
   );
 }
 

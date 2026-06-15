@@ -90,6 +90,7 @@ export const SparkIcon = (p) => (
 export const TRANSPORT_ICON = {
   flight: FlightIcon,
   train: TrainIcon,
+  bus: CabIcon, // no dedicated bus glyph yet; reuse the road-vehicle icon
   cab: CabIcon,
   walk: WalkIcon,
   other: PinIcon,

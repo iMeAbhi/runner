@@ -24,7 +24,9 @@ export const ACCENTS = {
 
 const DEFAULT_SETTINGS = {
   appsScriptUrl: '',
-  homeLocation: 'Hyderabad',
+  homeLocation: '', // where "home" really is (e.g. Kolkata) — drives "been home" insights
+  currentLocation: '', // where you currently live/base out of (e.g. Hyderabad)
+  birthday: '', // YYYY-MM-DD; only month/day are used for insights
   driveFolderUrl: '', // master Drive folder; trip sub-folders are created inside it
   theme: 'amoled', // amoled | light | mood | sky
   accent: 'aviation',
