@@ -164,6 +164,25 @@ export function AppProvider({ children }) {
     }
   }, [settings.appsScriptUrl, settings.apiKey, notify]);
 
+  // ── Verify URL + key without side effects (Settings "Verify" button) ───────
+  const verifyConnection = useCallback(async () => {
+    if (!settings.appsScriptUrl) {
+      notify('Paste your Apps Script URL first', 'warn');
+      return;
+    }
+    try {
+      await api.ping(settings.appsScriptUrl, settings.apiKey);
+      notify('Connected — key accepted ✓', 'ok');
+    } catch (e) {
+      notify(
+        /unauthorized/i.test(e.message)
+          ? 'Key mismatch — check the API key matches your sheet'
+          : `Could not reach backend: ${e.message}`,
+        'error'
+      );
+    }
+  }, [settings.appsScriptUrl, settings.apiKey, notify]);
+
   // ── Flush the offline outbox sequentially when back online ─────────────────
   const flushOutbox = useCallback(async () => {
     if (!online || !settings.appsScriptUrl) return;
@@ -350,6 +369,7 @@ export function AppProvider({ children }) {
     activeHolidays,
     usingCustomHolidays,
     refreshFromSheet,
+    verifyConnection,
     saveTrip,
     uploadPhotos,
     deleteTrip,

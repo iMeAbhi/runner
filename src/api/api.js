@@ -29,6 +29,23 @@ export async function fetchAll(baseUrl, token = '') {
   return { trips: data.trips || [], holidays: data.holidays || [] };
 }
 
+/**
+ * Non-destructive connectivity + key check. Resolves to { ok: true } when the
+ * URL is reachable and the token is accepted; throws 'Unauthorized' on a key
+ * mismatch, or a network error if unreachable. Backs the Settings "Verify" button.
+ */
+export async function ping(baseUrl, token = '') {
+  if (!baseUrl) throw new Error('No Apps Script URL configured');
+  const auth = token ? `&token=${encodeURIComponent(token)}` : '';
+  const res = await withTimeout(
+    fetch(`${baseUrl}?action=ping&t=${Date.now()}${auth}`, { method: 'GET' })
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
 async function post(baseUrl, payload, token = '') {
   if (!baseUrl) throw new Error('No Apps Script URL configured');
   const res = await withTimeout(

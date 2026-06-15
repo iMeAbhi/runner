@@ -24,28 +24,104 @@
 // ⬇️ EDIT THIS — or leave blank to bind to the container spreadsheet.
 var SPREADSHEET_ID = '';
 
+var TRIPS_TAB = 'Trips';
+var HOLIDAYS_TAB = 'Holidays';
+var CONFIG_TAB = 'Config';
+var MEDIA_ROOT = 'Travel_App_Media';
+
 // ── Security ─────────────────────────────────────────────────────────────────
 // This Web App is deployed "Anyone" (no Google login) so the PWA can call it
 // without OAuth/CORS friction. That means the /exec URL alone would let anyone
-// who obtains it read or modify your trips. To prevent that, set a long random
-// shared secret here AND paste the SAME value into the PWA's
-// Settings → "API access key". Every request must carry it or it is rejected.
+// who obtains it read or modify your trips. To prevent that, the API key lives
+// in this spreadsheet's "Config" tab (cell next to SHARED_SECRET). Every request
+// must carry a matching `token` or it is rejected.
 //
-//   • Generate one in Settings (the "Generate" button) and copy it here.
-//   • Leaving this '' DISABLES the check (insecure — not recommended for a
-//     public deployment). The app keeps working either way.
-//   • After editing, redeploy: Deploy → Manage deployments → Edit → New version.
-var SHARED_SECRET = '';
+// The key in the SHEET — not in this code — is the source of truth, so you only
+// ever deploy this script ONCE. To create or rotate the key afterwards, use the
+// "Travel App" menu that appears in the sheet (Generate / Show API key), then
+// paste it into the PWA's Settings → "API access key" and click Verify. No more
+// Apps Script edits or redeploys. An empty/missing key DISABLES the check.
+var CONFIG_HEADERS = ['Key', 'Value'];
 
-/** True when the request carries the right key (or the check is disabled). */
-function authorized(token) {
-  if (!SHARED_SECRET) return true; // check disabled — see note above
-  return String(token) === String(SHARED_SECRET);
+/** Ensure the Config tab exists and return it. */
+function getConfigSheet() {
+  var book = getBook();
+  var sheet = book.getSheetByName(CONFIG_TAB);
+  if (!sheet) {
+    sheet = book.insertSheet(CONFIG_TAB);
+    sheet.appendRow(CONFIG_HEADERS);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
 }
 
-var TRIPS_TAB = 'Trips';
-var HOLIDAYS_TAB = 'Holidays';
-var MEDIA_ROOT = 'Travel_App_Media';
+/** Read the shared secret from the Config tab. '' (missing/blank) = check off. */
+function getSecret() {
+  var book = getBook();
+  var sheet = book.getSheetByName(CONFIG_TAB);
+  if (!sheet) return '';
+  var values = sheet.getDataRange().getValues();
+  for (var r = 0; r < values.length; r++) {
+    if (String(values[r][0]).trim() === 'SHARED_SECRET') {
+      return String(values[r][1] || '').trim();
+    }
+  }
+  return '';
+}
+
+/** Write/replace the shared secret in the Config tab; returns the value. */
+function setSecret(value) {
+  var sheet = getConfigSheet();
+  var values = sheet.getDataRange().getValues();
+  for (var r = 1; r < values.length; r++) {
+    if (String(values[r][0]).trim() === 'SHARED_SECRET') {
+      sheet.getRange(r + 1, 2).setValue(value);
+      return value;
+    }
+  }
+  sheet.appendRow(['SHARED_SECRET', value]);
+  return value;
+}
+
+/** A long random key (two UUIDs, hyphens stripped → 64 hex chars). */
+function randomSecret() {
+  return (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+}
+
+/** True when the request carries the right key (or no key is configured). */
+function authorized(token) {
+  var secret = getSecret();
+  if (!secret) return true; // check disabled — generate a key from the sheet menu
+  return String(token) === secret;
+}
+
+// ── Sheet menu: manage the API key without touching Apps Script ──────────────
+// Reload the spreadsheet after deploying to see the "Travel App" menu.
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Travel App')
+    .addItem('Show API key', 'showApiKey')
+    .addItem('Generate / rotate API key', 'rotateApiKey')
+    .addToUi();
+}
+
+function showApiKey() {
+  var ui = SpreadsheetApp.getUi();
+  var key = getSecret();
+  if (!key) {
+    ui.alert('No API key yet', 'Choose "Generate / rotate API key" to create one, then paste it into the app (Settings → API access key).', ui.ButtonSet.OK);
+  } else {
+    ui.alert('Your API key', key + '\n\nCopy it into the app: Settings → API access key, then click Verify.', ui.ButtonSet.OK);
+  }
+}
+
+function rotateApiKey() {
+  var ui = SpreadsheetApp.getUi();
+  var resp = ui.alert('Generate a new API key?', 'This replaces any existing key. Each device/app then needs the new key pasted in before it can sync again.', ui.ButtonSet.OK_CANCEL);
+  if (resp !== ui.Button.OK) return;
+  var key = setSecret(randomSecret());
+  ui.alert('New API key', key + '\n\nPaste it into the app: Settings → API access key, then click Verify.', ui.ButtonSet.OK);
+}
 
 var TRIP_HEADERS = [
   'ID', 'City', 'State_Country', 'Start_Date', 'End_Date',
@@ -75,6 +151,7 @@ function getSheet(name, headers) {
 function setup() {
   getSheet(TRIPS_TAB, TRIP_HEADERS);
   getSheet(HOLIDAYS_TAB, HOLIDAY_HEADERS);
+  getConfigSheet();
   return 'Tabs ready.';
 }
 
@@ -111,6 +188,11 @@ function doGet(e) {
       return json({ error: 'Unauthorized' });
     }
     var action = (e && e.parameter && e.parameter.action) || 'getAll';
+    if (action === 'ping') {
+      // Lightweight, side-effect-free check used by the app's "Verify" button.
+      // Reaching here means the URL is valid and the key was accepted.
+      return json({ ok: true });
+    }
     if (action === 'getAll') {
       var trips = readObjects(getSheet(TRIPS_TAB, TRIP_HEADERS), TRIP_HEADERS);
       var holidays = readObjects(getSheet(HOLIDAYS_TAB, HOLIDAY_HEADERS), HOLIDAY_HEADERS);
