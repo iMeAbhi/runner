@@ -5,12 +5,14 @@ import Background from './components/Background.jsx';
 import BottomNav from './components/BottomNav.jsx';
 import TimelineFeed from './components/tabs/TimelineFeed.jsx';
 import Planner from './components/tabs/Planner.jsx';
+import Quests from './components/tabs/Quests.jsx';
 import Analytics from './components/tabs/Analytics.jsx';
 import Settings from './components/tabs/Settings.jsx';
 
 const TABS = {
   timeline: TimelineFeed,
   planner: Planner,
+  quests: Quests,
   insights: Analytics,
   settings: Settings,
 };

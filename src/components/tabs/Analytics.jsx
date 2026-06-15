@@ -5,7 +5,6 @@ import {
   computeStats,
   filterByMonths,
   filterByRange,
-  indiaCoverage,
   placeVisits,
   newYearInsight,
   birthdayInsight,
@@ -37,7 +36,6 @@ export default function Analytics() {
   }, [trips, filter, range]);
 
   const stats = useMemo(() => computeStats(filtered), [filtered]);
-  const coverage = useMemo(() => indiaCoverage(trips), [trips]); // coverage is lifetime
 
   // Life-moment insights are inherently lifetime, so they ignore the date filter.
   const home = useMemo(() => placeVisits(trips, settings.homeLocation), [trips, settings.homeLocation]);
@@ -180,27 +178,6 @@ export default function Analytics() {
           )}
         </div>
       )}
-
-      {/* India coverage wheel */}
-      <div className="glass rounded-4xl p-4">
-        <div className="flex items-center gap-4">
-          <CoverageWheel pct={coverage.pct} />
-          <div>
-            <p className="text-sm font-bold text-ink">India coverage</p>
-            <p className="text-xs text-ink-dim">{coverage.coveredCount} of {coverage.total} States & UTs</p>
-          </div>
-        </div>
-        {coverage.remaining.length > 0 && (
-          <div className="mt-3">
-            <p className="mb-1 text-xs font-semibold text-ink-dim">Still to explore</p>
-            <div className="flex flex-wrap gap-1.5">
-              {coverage.remaining.map((r) => (
-                <span key={r} className="rounded-full bg-white/5 px-2.5 py-1 text-[11px] text-ink-dim">{r}</span>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -224,27 +201,3 @@ function Stat({ value, label, big }) {
   );
 }
 
-function CoverageWheel({ pct }) {
-  const r = 30;
-  const c = 2 * Math.PI * r;
-  return (
-    <svg width="84" height="84" viewBox="0 0 84 84" className="shrink-0">
-      <defs>
-        <linearGradient id="cov" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="rgb(var(--accent))" />
-          <stop offset="1" stopColor="rgb(var(--accent-2))" />
-        </linearGradient>
-      </defs>
-      <circle cx="42" cy="42" r={r} fill="none" stroke="rgb(var(--ink-dim) / 0.22)" strokeWidth="8" />
-      <motion.circle
-        cx="42" cy="42" r={r} fill="none" stroke="url(#cov)" strokeWidth="8" strokeLinecap="round"
-        strokeDasharray={c}
-        initial={{ strokeDashoffset: c }}
-        animate={{ strokeDashoffset: c - (c * Math.min(pct, 100)) / 100 }}
-        transition={{ duration: 0.9, ease: 'easeOut' }}
-        transform="rotate(-90 42 42)"
-      />
-      <text x="42" y="47" textAnchor="middle" className="fill-ink text-[16px] font-black">{pct}%</text>
-    </svg>
-  );
-}

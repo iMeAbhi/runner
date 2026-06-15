@@ -60,6 +60,12 @@ export const CalendarIcon = (p) => (
     <path d="M4 9h16M8 3v4M16 3v4" />
   </svg>
 );
+export const QuestIcon = (p) => (
+  <svg {...base} {...p}>
+    {/* Planted pennant flag — a "travel mission" marker */}
+    <path d="M7 21V4M7 4h11l-2.5 3L18 10H7" />
+  </svg>
+);
 export const ChartIcon = (p) => (
   <svg {...base} {...p}>
     <path d="M5 19V5M19 19V11M12 19V8M5 19h15" />

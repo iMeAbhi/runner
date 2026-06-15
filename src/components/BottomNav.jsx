@@ -1,9 +1,10 @@
 import { motion } from 'framer-motion';
-import { HomeIcon, CalendarIcon, ChartIcon, GearIcon } from './Icons.jsx';
+import { HomeIcon, CalendarIcon, QuestIcon, ChartIcon, GearIcon } from './Icons.jsx';
 
 const TABS = [
   { id: 'timeline', label: 'Timeline', Icon: HomeIcon },
   { id: 'planner', label: 'Planner', Icon: CalendarIcon },
+  { id: 'quests', label: 'Quests', Icon: QuestIcon },
   { id: 'insights', label: 'Insights', Icon: ChartIcon },
   { id: 'settings', label: 'Settings', Icon: GearIcon },
 ];
