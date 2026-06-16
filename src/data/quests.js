@@ -16,12 +16,14 @@
 
 import { INDIA_STATES, matchRegion } from './indiaStates.js';
 import { REGION_COORDS } from './geo.js';
+import { countedLayovers } from '../utils/insights.js';
 
 const norm = (s) => (s || '').trim().toLowerCase();
 
-/** Haystack of every place-ish field on a trip, lowercased, for keyword tests. */
+/** Haystack of every place-ish field on a trip, lowercased, for keyword tests.
+ *  Toggle-ON layovers are included so a counted stopover can clear a site. */
 function tripHaystack(t) {
-  return norm(`${t.City || ''} ${t.State_Country || ''}`);
+  return norm(`${t.City || ''} ${t.State_Country || ''} ${countedLayovers(t).join(' ')}`);
 }
 
 // ── Quest A: India coverage — all 36 States & UTs ───────────────────────────
@@ -30,6 +32,11 @@ function computeIndiaCoverage(trips) {
   for (const t of trips) {
     const region = matchRegion(`${t.State_Country || ''} ${t.City || ''}`);
     if (region) covered.add(region);
+    // Toggle-ON layovers clear their state too.
+    for (const lay of countedLayovers(t)) {
+      const lr = matchRegion(lay);
+      if (lr) covered.add(lr);
+    }
   }
   const items = INDIA_STATES.map((r) => {
     const [lat, lng] = REGION_COORDS[r.name] || [];

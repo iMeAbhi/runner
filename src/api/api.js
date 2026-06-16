@@ -64,6 +64,13 @@ async function post(baseUrl, payload, token = '') {
   return data;
 }
 
+/**
+ * Send ONE ticket/screenshot (base64) to the backend's Gemini proxy for parsing.
+ * Returns { parsed: {...} } or { error }. Callers send one file per request.
+ */
+export const parseTicket = (baseUrl, { base64, mime, filename }, token) =>
+  post(baseUrl, { action: 'parseTicket', base64, mime, filename }, token);
+
 /** Upsert a trip row (no media). Returns { trip }. */
 export const saveTrip = (baseUrl, trip, token) =>
   post(baseUrl, { action: 'saveTrip', trip }, token);

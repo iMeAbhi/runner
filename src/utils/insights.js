@@ -4,6 +4,7 @@
 
 import { parseISO, toISO, isWeekend, addDays, daysBetween, startOfToday } from './dates.js';
 import { matchRegion, INDIA_STATES, TOTAL_INDIA_REGIONS } from '../data/indiaStates.js';
+import { coordsForPlace, haversineKm } from '../data/geo.js';
 
 const MODE = {
   flight: ['flight', 'plane', 'air', 'fly'],
@@ -36,6 +37,61 @@ export function classifyTransport(mode = '') {
 export function tripDays(trip) {
   if (!trip.Start_Date || !trip.End_Date) return 0;
   return Math.max(1, daysBetween(trip.Start_Date, trip.End_Date) + 1);
+}
+
+// ── Multi-vector / layover helpers ──────────────────────────────────────────
+
+/** Parsed layover city list from the comma-separated Layovers cell. */
+export function layoverList(trip) {
+  return String(trip.Layovers || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Whether this trip's layovers count as real visited destinations. */
+export function layoverCountsAsVisit(trip) {
+  const v = trip.Layover_Count_As_Visit;
+  return v === true || String(v).trim().toUpperCase() === 'TRUE';
+}
+
+/** Layover cities that should be treated as visited (toggle ON), else []. */
+export function countedLayovers(trip) {
+  return layoverCountsAsVisit(trip) ? layoverList(trip) : [];
+}
+
+/**
+ * Distance for a trip in km. Prefers an explicit Distance_KM (e.g. from a parsed
+ * ticket); otherwise sums great-circle segments Origin → layovers → Destination
+ * with whatever coordinates resolve. Layover segments always count toward
+ * distance regardless of the visit toggle.
+ */
+export function tripDistanceKm(trip) {
+  const explicit = Number(trip.Distance_KM);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+  const stops = [trip.Origin_City, ...layoverList(trip), trip.City].map((c) =>
+    c ? coordsForPlace(c) : null
+  );
+  let total = 0;
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (stops[i] && stops[i + 1]) total += haversineKm(stops[i], stops[i + 1]);
+  }
+  return total;
+}
+
+/** Air / Rail / Ground distance totals (km) across a trip set. */
+export function distanceTotals(trips) {
+  let air = 0;
+  let rail = 0;
+  let ground = 0;
+  for (const t of trips) {
+    const km = tripDistanceKm(t);
+    const mode = classifyTransport(t.Transport_Mode);
+    if (mode === 'flight') air += km;
+    else if (mode === 'train') rail += km;
+    else ground += km; // car / bus / walk / other
+  }
+  return { air, rail, ground, total: air + rail + ground };
 }
 
 export function photoList(trip) {
@@ -88,6 +144,13 @@ export function computeStats(trips) {
       const region = matchRegion(`${t.State_Country} ${t.City || ''}`);
       if (region) indianRegions.add(region);
       else foreignCountries.add(t.State_Country.trim().toLowerCase());
+    }
+    // Toggle-ON layovers are full destinations: count their city + any Indian region.
+    for (const lay of countedLayovers(t)) {
+      cities.add(lay.toLowerCase());
+      cityCount[lay] = (cityCount[lay] || 0) + 1;
+      const layRegion = matchRegion(lay);
+      if (layRegion) indianRegions.add(layRegion);
     }
     const mode = classifyTransport(t.Transport_Mode);
     modeCounts[mode] = (modeCounts[mode] || 0) + 1;
@@ -219,6 +282,45 @@ export function daysSinceLastTrip(trips) {
     .sort((a, b) => (a.End_Date < b.End_Date ? 1 : -1));
   if (!past.length) return null;
   return daysBetween(past[0].End_Date, startOfToday());
+}
+
+// ── Top-5 leaderboards ──────────────────────────────────────────────────────
+// Each returns [{ name, value, sub }] ready for <LeaderboardModal />.
+
+/** Most-flown operators/airlines/rail brands by trip count. */
+export function topOperators(trips, limit = 5) {
+  const counts = {};
+  for (const t of trips) {
+    const op = (t.Operator_Name || '').trim();
+    if (op) counts[op] = (counts[op] || 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([name, n]) => ({ name, value: `${n} trip${n === 1 ? '' : 's'}`, count: n }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
+/** Longest trips by continuous duration. */
+export function longestTrips(trips, limit = 5) {
+  return trips
+    .map((t) => ({ name: t.City || 'Trip', count: tripDays(t), sub: t.State_Country || '' }))
+    .filter((x) => x.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit)
+    .map((x) => ({ name: x.name, value: `${x.count} day${x.count === 1 ? '' : 's'}`, sub: x.sub }));
+}
+
+/** Most-visited destination cities (includes toggle-ON layovers). */
+export function topDestinations(trips, limit = 5) {
+  const counts = {};
+  for (const t of trips) {
+    if (t.City) counts[t.City.trim()] = (counts[t.City.trim()] || 0) + 1;
+    for (const lay of countedLayovers(t)) counts[lay] = (counts[lay] || 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([name, n]) => ({ name, value: `${n} visit${n === 1 ? '' : 's'}`, count: n }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
 }
 
 // ── Home / current-location & life-moment insights ──────────────────────────

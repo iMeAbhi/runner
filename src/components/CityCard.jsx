@@ -72,6 +72,13 @@ export default function CityCard({ trip, status, onOpen }) {
             </>
           )}
         </div>
+
+        {/* Implicit-reset flag: this trip's return date was auto-filled. */}
+        {trip.autoClosed && (
+          <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-400/20 px-2.5 py-1 text-[11px] font-semibold text-amber-100 ring-1 ring-amber-300/40">
+            ⚠️ Auto-closed trip. Tap to adjust return date.
+          </div>
+        )}
       </div>
     </motion.button>
   );

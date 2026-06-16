@@ -21,9 +21,18 @@ const AURAS = {
   gold: { core: '#f5c451', glow: 'rgba(245,196,81,0.55)', line: '#ffe9a8' },
 };
 
-export default function IndiaMap({ nodes = [], origin = null, aura = 'accent', showAll = true }) {
+export default function IndiaMap({ nodes = [], routes = [], origin = null, aura = 'accent', showAll = true }) {
   const palette = AURAS[aura] || AURAS.accent;
   const [selected, setSelected] = useState(null);
+
+  // Project trip routes (Origin → layovers → Destination) into SVG polylines.
+  const placedRoutes = useMemo(
+    () =>
+      routes
+        .map((r) => (r.stops || []).filter((s) => s.lat != null).map((s) => ({ ...s, ...projectPoint(s.lat, s.lng, { w: W, h: H, pad: PAD }) })))
+        .filter((stops) => stops.length >= 2),
+    [routes]
+  );
 
   // Project everything once into SVG space.
   const outlinePath = useMemo(() => {
@@ -66,6 +75,30 @@ export default function IndiaMap({ nodes = [], origin = null, aura = 'accent', s
           animate={{ pathLength: 1, opacity: 1 }}
           transition={{ duration: 1.1, ease: 'easeInOut' }}
         />
+
+        {/* Trip routes: continuous Origin → layover(s) → Destination polylines.
+            Uncounted layovers render as tiny translucent dots with no label. */}
+        {placedRoutes.map((stops, ri) => (
+          <g key={`route-${ri}`}>
+            <motion.polyline
+              points={stops.map((s) => `${s.x.toFixed(1)},${s.y.toFixed(1)}`).join(' ')}
+              fill="none"
+              stroke={palette.line}
+              strokeWidth="0.8"
+              strokeOpacity="0.35"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              initial={{ pathLength: 0, opacity: 0 }}
+              animate={{ pathLength: 1, opacity: 0.35 }}
+              transition={{ duration: 0.8, delay: 0.4 + ri * 0.03, ease: 'easeOut' }}
+            />
+            {stops.map((s, si) =>
+              s.kind === 'layover' && !s.counted ? (
+                <circle key={si} cx={s.x} cy={s.y} r="1.6" fill="rgb(var(--ink-dim) / 0.5)" />
+              ) : null
+            )}
+          </g>
+        ))}
 
         {/* Transit vectors: origin → each visited node */}
         {originPt &&

@@ -55,18 +55,23 @@ function getConfigSheet() {
   return sheet;
 }
 
-/** Read the shared secret from the Config tab. '' (missing/blank) = check off. */
-function getSecret() {
+/** Read any key/value from the Config tab ('' if missing). */
+function getConfigValue(key) {
   var book = getBook();
   var sheet = book.getSheetByName(CONFIG_TAB);
   if (!sheet) return '';
   var values = sheet.getDataRange().getValues();
   for (var r = 0; r < values.length; r++) {
-    if (String(values[r][0]).trim() === 'SHARED_SECRET') {
+    if (String(values[r][0]).trim() === key) {
       return String(values[r][1] || '').trim();
     }
   }
   return '';
+}
+
+/** Read the shared secret from the Config tab. '' (missing/blank) = check off. */
+function getSecret() {
+  return getConfigValue('SHARED_SECRET');
 }
 
 /** Write/replace the shared secret in the Config tab; returns the value. */
@@ -126,6 +131,8 @@ function rotateApiKey() {
 var TRIP_HEADERS = [
   'ID', 'City', 'State_Country', 'Start_Date', 'End_Date',
   'Transport_Mode', 'Accommodation', 'Drive_Folder_URL', 'Photo_URLs',
+  // Multi-vector track model (appended; existing rows read blank for these).
+  'Origin_City', 'Operator_Name', 'Distance_KM', 'Layovers', 'Layover_Count_As_Visit',
 ];
 var HOLIDAY_HEADERS = ['Date', 'Holiday_Name'];
 
@@ -143,6 +150,14 @@ function getSheet(name, headers) {
     sheet = book.insertSheet(name);
     sheet.appendRow(headers);
     sheet.setFrozenRows(1);
+  } else if (headers && headers.length) {
+    // Top-up the header row if columns were appended to the schema (so older
+    // sheets pick up new fields like Origin_City/Distance_KM and round-trip them).
+    var lastCol = sheet.getLastColumn();
+    var current = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+    if (current.length < headers.length) {
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    }
   }
   return sheet;
 }
@@ -219,6 +234,8 @@ function doPost(e) {
         return json({ url: uploadImage(body) });
       case 'syncFolder':
         return json(syncFolder(body));
+      case 'parseTicket':
+        return json(parseUploadedTicket(body));
       default:
         return json({ error: 'Unknown action: ' + body.action });
     }
@@ -382,4 +399,72 @@ function syncFolder(body) {
     }
   }
   return { urls: urls, folderUrl: folder.getUrl() };
+}
+
+// ── Gemini Flash ticket parser (opt-in) ──────────────────────────────────────
+/**
+ * Proxy a ticket/boarding-pass image (base64) to the Gemini Flash API and return
+ * a structured journey object. DISABLED until you add a GEMINI_API_KEY row to the
+ * Config tab (get a free key at aistudio.google.com). Optionally set GEMINI_MODEL
+ * (default gemini-1.5-flash).
+ *   body = { base64, mime, filename }
+ *   returns { parsed: { transportMode, operatorName, originCity, destinationCity,
+ *                       departureDate, arrivalDate, layovers[] } }  OR  { error }
+ * NOTE: free-tier Gemini is NOT private — Google may use uploaded data. Opt in
+ * consciously; ticket documents contain names/PNRs.
+ */
+function parseUploadedTicket(body) {
+  var apiKey = getConfigValue('GEMINI_API_KEY');
+  if (!apiKey) {
+    return { error: 'AI ticket parser is off. Add a GEMINI_API_KEY row in the Config tab to enable it.' };
+  }
+  if (!body || !body.base64) return { error: 'No file data received' };
+
+  var model = getConfigValue('GEMINI_MODEL') || 'gemini-1.5-flash';
+  var prompt =
+    'You parse travel tickets. From this ticket/boarding-pass/screenshot, extract the journey. ' +
+    'Return ONLY a JSON object (no markdown, no backticks, no commentary) with EXACTLY these keys: ' +
+    'transportMode (one of: flight, train, bus, car), operatorName, originCity, destinationCity, ' +
+    'departureDate (YYYY-MM-DD), arrivalDate (YYYY-MM-DD or ""), layovers (array of city names, [] if none). ' +
+    'Use full city names, not airport/station codes. Unknown fields = "" (or [] for layovers).';
+
+  var payload = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        { inline_data: { mime_type: body.mime || 'image/jpeg', data: body.base64 } },
+      ],
+    }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+  };
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+    model + ':generateContent?key=' + encodeURIComponent(apiKey);
+
+  var resp = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+  if (resp.getResponseCode() !== 200) {
+    return { error: 'Gemini error ' + resp.getResponseCode() + ': ' + resp.getContentText().slice(0, 180) };
+  }
+
+  var text;
+  try {
+    text = JSON.parse(resp.getContentText()).candidates[0].content.parts[0].text;
+  } catch (e) {
+    return { error: 'Empty / unexpected Gemini response' };
+  }
+  var parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    try {
+      parsed = JSON.parse(String(text).replace(/```json|```/g, '').trim());
+    } catch (e2) {
+      return { error: 'Model did not return valid JSON' };
+    }
+  }
+  return { parsed: parsed };
 }

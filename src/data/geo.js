@@ -3,6 +3,9 @@
 // the same coordinate space drives the India outline, region nodes, quest nodes
 // and the transit vectors radiating from home/current location.
 
+import { regionForCity } from './cities.js';
+import { matchRegion } from './indiaStates.js';
+
 // Bounding box (with a little breathing room) covering mainland India + the
 // island UTs. Latitudes shrink top→bottom in SVG space, so y is inverted.
 export const GEO_BOUNDS = { latMax: 37.5, latMin: 6.5, lngMin: 67.5, lngMax: 97.5 };
@@ -91,3 +94,55 @@ export const CITY_COORDS = {
   'agra': [27.18, 78.01], 'nagpur': [21.15, 79.09], 'surat': [21.17, 72.83],
   'darjeeling': [27.04, 88.26], 'rishikesh': [30.09, 78.27], 'haridwar': [29.95, 78.16],
 };
+
+// Global macro-hubs so international trips resolve without a dropdown lock.
+// Free to extend — any [lat, lng] entry just works.
+export const WORLD_CITY_COORDS = {
+  'kathmandu': [27.72, 85.32], 'pokhara': [28.21, 83.99], 'colombo': [6.93, 79.86],
+  'kandy': [7.29, 80.64], 'male': [4.18, 73.51], 'thimphu': [27.47, 89.64],
+  'dubai': [25.20, 55.27], 'abu dhabi': [24.45, 54.38], 'doha': [25.29, 51.53],
+  'singapore': [1.35, 103.82], 'kuala lumpur': [3.14, 101.69], 'bangkok': [13.76, 100.50],
+  'phuket': [7.88, 98.39], 'chiang mai': [18.79, 98.98], 'bali': [-8.34, 115.09],
+  'denpasar': [-8.65, 115.22], 'ubud': [-8.51, 115.26], 'jakarta': [-6.21, 106.85],
+  'hong kong': [22.32, 114.17], 'macau': [22.20, 113.54], 'shanghai': [31.23, 121.47],
+  'beijing': [39.90, 116.41], 'tokyo': [35.68, 139.69], 'osaka': [34.69, 135.50],
+  'seoul': [37.57, 126.98], 'sydney': [-33.87, 151.21], 'melbourne': [-37.81, 144.96],
+  'london': [51.51, -0.13], 'paris': [48.86, 2.35], 'rome': [41.90, 12.50],
+  'amsterdam': [52.37, 4.90], 'zurich': [47.38, 8.54], 'istanbul': [41.01, 28.98],
+  'new york': [40.71, -74.01], 'san francisco': [37.77, -122.42], 'toronto': [43.65, -79.38],
+};
+
+const norm = (s) => (s || '').trim().toLowerCase();
+
+/**
+ * Resolve any free-text place to {lat, lng}, or null if truly unknown.
+ * Order: exact city (India) → world hub → region-of-city → direct state match.
+ * Used by the map for trip/quest nodes and transit-vector origins.
+ */
+export function coordsForPlace(name) {
+  const key = norm(name);
+  if (!key) return null;
+  if (CITY_COORDS[key]) return { lat: CITY_COORDS[key][0], lng: CITY_COORDS[key][1] };
+  if (WORLD_CITY_COORDS[key]) return { lat: WORLD_CITY_COORDS[key][0], lng: WORLD_CITY_COORDS[key][1] };
+  const region = regionForCity(name) || matchRegion(name);
+  if (region && REGION_COORDS[region]) return { lat: REGION_COORDS[region][0], lng: REGION_COORDS[region][1] };
+  return null;
+}
+
+/** Great-circle distance in km between two {lat,lng} (or [lat,lng]) points. */
+export function haversineKm(a, b) {
+  if (!a || !b) return 0;
+  const la1 = Array.isArray(a) ? a[0] : a.lat;
+  const lo1 = Array.isArray(a) ? a[1] : a.lng;
+  const la2 = Array.isArray(b) ? b[0] : b.lat;
+  const lo2 = Array.isArray(b) ? b[1] : b.lng;
+  if (la1 == null || lo1 == null || la2 == null || lo2 == null) return 0;
+  const R = 6371; // Earth radius, km
+  const rad = Math.PI / 180;
+  const dLat = (la2 - la1) * rad;
+  const dLon = (lo2 - lo1) * rad;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(la1 * rad) * Math.cos(la2 * rad) * Math.sin(dLon / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(s))));
+}

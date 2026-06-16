@@ -2,21 +2,9 @@ import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '../../context/AppContext.jsx';
 import { QUESTS } from '../../data/quests.js';
-import { CITY_COORDS, REGION_COORDS } from '../../data/geo.js';
-import { regionForCity } from '../../data/cities.js';
-import { matchRegion } from '../../data/indiaStates.js';
+import { coordsForPlace } from '../../data/geo.js';
+import { layoverList, layoverCountsAsVisit } from '../../utils/insights.js';
 import IndiaMap from '../IndiaMap.jsx';
-
-// Resolve a free-text place name to {lat,lng}: exact city → region-of-city →
-// direct state-name match. Returns null when nothing is known.
-function coordsForPlace(name) {
-  const key = (name || '').trim().toLowerCase();
-  if (!key) return null;
-  if (CITY_COORDS[key]) return { lat: CITY_COORDS[key][0], lng: CITY_COORDS[key][1] };
-  const region = regionForCity(name) || matchRegion(name);
-  if (region && REGION_COORDS[region]) return { lat: REGION_COORDS[region][0], lng: REGION_COORDS[region][1] };
-  return null;
-}
 
 export default function Quests() {
   const { trips, settings } = useApp();
@@ -33,6 +21,26 @@ export default function Quests() {
     if (cur) return { ...cur, label: settings.currentLocation };
     return null;
   }, [settings.homeLocation, settings.currentLocation]);
+
+  // Trip routes (Origin → layovers → Destination) for the India transit map.
+  const routes = useMemo(() => {
+    if (quest.id !== 'india') return [];
+    return trips
+      .map((t) => {
+        const stops = [];
+        const o = coordsForPlace(t.Origin_City);
+        if (o) stops.push({ ...o, kind: 'origin' });
+        const counted = layoverCountsAsVisit(t);
+        for (const lay of layoverList(t)) {
+          const c = coordsForPlace(lay);
+          if (c) stops.push({ ...c, kind: 'layover', counted, label: lay });
+        }
+        const d = coordsForPlace(t.City);
+        if (d) stops.push({ ...d, kind: 'dest', label: t.City });
+        return stops.length >= 2 ? { stops } : null;
+      })
+      .filter(Boolean);
+  }, [quest.id, trips]);
 
   const visited = result.items.filter((i) => i.done);
   const remaining = result.items.filter((i) => !i.done);
@@ -96,7 +104,7 @@ export default function Quests() {
 
             {/* Interactive transit map */}
             <div className="mt-3 rounded-3xl bg-black/10 p-2">
-              <IndiaMap nodes={result.items} origin={origin} aura={quest.aura} showAll={quest.showAllNodes} />
+              <IndiaMap nodes={result.items} routes={routes} origin={origin} aura={quest.aura} showAll={quest.showAllNodes} />
             </div>
           </div>
 

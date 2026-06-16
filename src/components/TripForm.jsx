@@ -11,21 +11,65 @@ const MODES = ['Flight', 'Train', 'Car', 'Bus', 'Walk'];
 const empty = {
   City: '',
   State_Country: '',
+  Origin_City: '',
   Start_Date: '',
   End_Date: '',
   Transport_Mode: 'Flight',
+  Operator_Name: '',
+  Distance_KM: '',
+  Layovers: '',
+  Layover_Count_As_Visit: 'FALSE',
   Accommodation: '',
   Drive_Folder_URL: '', // auto-populated by the backend on photo upload
   Photo_URLs: '',
 };
 
+// Map a Gemini-parsed ticket object onto our form field names.
+function mapParsedToForm(p) {
+  return {
+    Origin_City: p.originCity || '',
+    City: p.destinationCity || '',
+    Start_Date: p.departureDate || '',
+    End_Date: p.arrivalDate || '',
+    Transport_Mode: titleCase(p.transportMode) || 'Flight',
+    Operator_Name: p.operatorName || '',
+    Layovers: Array.isArray(p.layovers) ? p.layovers.join(', ') : p.layovers || '',
+  };
+}
+const titleCase = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
+
 // Add/edit a trip. Photos are compressed client-side and handed to the
 // sequential upload queue via saveTrip(record, compressedFiles).
 export default function TripForm({ initial, onClose }) {
-  const { saveTrip, notify } = useApp();
+  const { saveTrip, notify, parseTickets } = useApp();
   const [form, setForm] = useState({ ...empty, ...initial });
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  const countAsVisit = String(form.Layover_Count_As_Visit).toUpperCase() === 'TRUE';
+
+  // Sequential ticket import: one HTTP request per file (see parseTickets).
+  const onImport = async (e) => {
+    const picked = [...e.target.files];
+    e.target.value = '';
+    if (!picked.length) return;
+    setImporting(true);
+    try {
+      const results = await parseTickets(picked);
+      const first = results.find((r) => r && !r.error);
+      if (first) {
+        setForm((f) => ({ ...f, ...mapParsedToForm(first) }));
+        notify(`Parsed ${results.filter((r) => r && !r.error).length}/${picked.length} ticket(s)`, 'ok');
+      } else {
+        notify(results[0]?.error || 'Could not read the ticket', 'warn');
+      }
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
   // Track whether State/Country was auto-filled, so we can update it when the
   // city changes but never clobber a value the user typed themselves.
   const [autoRegion, setAutoRegion] = useState('');
@@ -103,6 +147,12 @@ export default function TripForm({ initial, onClose }) {
           </button>
         </div>
 
+        {/* Import a ticket / boarding-pass screenshot (parsed by the backend). */}
+        <label className="mb-3 flex cursor-pointer items-center justify-center gap-2 rounded-3xl border border-dashed border-white/20 px-3 py-2.5 text-xs font-semibold text-ink-dim hover:text-ink">
+          {importing ? 'Reading ticket(s)…' : '📄 Import from ticket / screenshot'}
+          <input type="file" accept="image/*,application/pdf" multiple onChange={onImport} className="hidden" disabled={importing} />
+        </label>
+
         {/* Suggestions for the City field; selecting one autofills State/Country. */}
         <datalist id="city-suggestions">
           {CITY_NAMES.map((c) => (
@@ -111,8 +161,9 @@ export default function TripForm({ initial, onClose }) {
         </datalist>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field className="col-span-2" label="City" value={form.City} onChange={onCityChange} list="city-suggestions" placeholder="Start typing… e.g. Leh" autoComplete="off" />
-          <Field className="col-span-2" label="State / Country (auto-fills)" value={form.State_Country} onChange={set('State_Country')} placeholder="e.g. Ladakh" />
+          <Field className="col-span-2" label="From (origin)" value={form.Origin_City} onChange={set('Origin_City')} list="city-suggestions" placeholder="e.g. Hyderabad" autoComplete="off" />
+          <Field className="col-span-2" label="City (destination)" value={form.City} onChange={onCityChange} list="city-suggestions" placeholder="Start typing… e.g. Leh" autoComplete="off" />
+          <Field className="col-span-2" label="State / Country (auto-fills)" value={form.State_Country} onChange={set('State_Country')} placeholder="e.g. Ladakh — or any country for global trips" />
           <DateField label="Start" value={form.Start_Date} onChange={setStart} />
           <DateField label="End" value={form.End_Date} onChange={setEnd} min={form.Start_Date} />
 
@@ -135,6 +186,31 @@ export default function TripForm({ initial, onClose }) {
                 </button>
               ))}
             </div>
+          </label>
+
+          <Field className="col-span-2" label="Operator (airline / rail / bus)" value={form.Operator_Name} onChange={set('Operator_Name')} placeholder="e.g. IndiGo, Vande Bharat" />
+          <Field label="Distance (km)" type="number" inputMode="numeric" value={form.Distance_KM} onChange={set('Distance_KM')} placeholder="auto" />
+          <Field label="Layovers" value={form.Layovers} onChange={set('Layovers')} placeholder="comma-separated" />
+
+          {/* Layover visit toggle — see Insights/Quests/Map treatment. */}
+          <label className="col-span-2 flex items-start justify-between gap-3 rounded-3xl glass px-3 py-2.5">
+            <span className="flex flex-col text-xs font-semibold text-ink-dim">
+              Count layover(s) as a visited destination?
+              <span className="text-[10px] font-normal">On = each layover becomes its own destination, counts in stats & Quests. Off = transit only (distance still counts).</span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={countAsVisit}
+              onClick={() => setForm((f) => ({ ...f, Layover_Count_As_Visit: countAsVisit ? 'FALSE' : 'TRUE' }))}
+              className="relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors"
+              style={{ background: countAsVisit ? 'rgb(var(--accent))' : 'rgb(var(--ink-dim) / 0.35)' }}
+            >
+              <span
+                className="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all"
+                style={{ left: countAsVisit ? '1.375rem' : '0.125rem' }}
+              />
+            </button>
           </label>
 
           <Field className="col-span-2" label="Accommodation" value={form.Accommodation} onChange={set('Accommodation')} placeholder="e.g. The Grand Dragon Hotel" />

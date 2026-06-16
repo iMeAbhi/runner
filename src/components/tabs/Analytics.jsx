@@ -8,8 +8,13 @@ import {
   placeVisits,
   newYearInsight,
   birthdayInsight,
+  distanceTotals,
+  topOperators,
+  longestTrips,
+  topDestinations,
 } from '../../utils/insights.js';
 import { fmtRange } from '../../utils/dates.js';
+import LeaderboardModal from '../LeaderboardModal.jsx';
 
 const FILTERS = [
   { id: '1m', label: '1 Month', months: 1 },
@@ -36,6 +41,8 @@ export default function Analytics() {
   }, [trips, filter, range]);
 
   const stats = useMemo(() => computeStats(filtered), [filtered]);
+  const distance = useMemo(() => distanceTotals(filtered), [filtered]);
+  const [modal, setModal] = useState(null); // { title, items } | null
 
   // Life-moment insights are inherently lifetime, so they ignore the date filter.
   const home = useMemo(() => placeVisits(trips, settings.homeLocation), [trips, settings.homeLocation]);
@@ -76,6 +83,20 @@ export default function Analytics() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Distance traveled — Air / Rail / Ground */}
+      <div className="space-y-2">
+        <DistanceBar label="Air distance ✈️" km={distance.air} max={distance.total} />
+        <DistanceBar label="Rail distance 🚆" km={distance.rail} max={distance.total} />
+        <DistanceBar label="Ground distance 🚗" km={distance.ground} max={distance.total} />
+      </div>
+
+      {/* Top-5 leaderboards */}
+      <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+        <LbButton onClick={() => setModal({ title: 'Top flight operators', items: topOperators(filtered) })}>✈️ Operators</LbButton>
+        <LbButton onClick={() => setModal({ title: 'Longest trips', items: longestTrips(filtered) })}>⏳ Longest trips</LbButton>
+        <LbButton onClick={() => setModal({ title: 'Most-visited destinations', items: topDestinations(filtered) })}>📍 Destinations</LbButton>
+      </div>
 
       {/* Metrics grid — re-animates whenever the filter morphs the dataset */}
       <motion.div key={filter + filtered.length} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className="grid grid-cols-2 gap-3">
@@ -178,7 +199,43 @@ export default function Analytics() {
           )}
         </div>
       )}
+
+      <LeaderboardModal
+        isOpen={!!modal}
+        onClose={() => setModal(null)}
+        title={modal?.title || ''}
+        items={modal?.items || []}
+      />
     </div>
+  );
+}
+
+function DistanceBar({ label, km, max }) {
+  const pct = max > 0 ? Math.round((km / max) * 100) : 0;
+  return (
+    <div className="glass rounded-3xl px-4 py-3">
+      <div className="mb-1.5 flex items-baseline justify-between">
+        <span className="text-xs font-semibold text-ink-dim">{label}</span>
+        <span className="text-sm font-black text-ink">{km.toLocaleString()} km</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-white/10">
+        <motion.div
+          className="h-full rounded-full"
+          style={{ background: 'linear-gradient(90deg, rgb(var(--accent)), rgb(var(--accent-2)))' }}
+          initial={{ width: 0 }}
+          animate={{ width: `${pct}%` }}
+          transition={{ duration: 0.8, ease: 'easeOut' }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function LbButton({ children, onClick }) {
+  return (
+    <button onClick={onClick} className="pill glass shrink-0" style={{ color: 'rgb(var(--ink))' }}>
+      {children}
+    </button>
   );
 }
 

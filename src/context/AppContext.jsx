@@ -10,6 +10,21 @@ import React, {
 import * as idb from '../db/idb.js';
 import * as api from '../api/api.js';
 import { DEFAULT_HOLIDAYS, parseHolidayText } from '../data/holidays.js';
+import { processNewVectorLeg } from '../utils/vectors.js';
+import { tripDistanceKm } from '../utils/insights.js';
+
+/** Read a File as base64 (no data: prefix) for the ticket-parse upload. */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result);
+      resolve({ base64: s.slice(s.indexOf(',') + 1), mime: file.type || 'image/jpeg' });
+    };
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
@@ -203,12 +218,51 @@ export function AppProvider({ children }) {
   }, [online, flushOutbox]);
 
   // ── Save a trip: write to IDB immediately (offline-first), then sync ───────
+  // Persist one row to the backend (or enqueue when offline / on failure).
+  const persistRow = useCallback(
+    async (row) => {
+      if (online && settings.appsScriptUrl) {
+        try {
+          await api.saveTrip(settings.appsScriptUrl, row, settings.apiKey);
+          return;
+        } catch {
+          /* fall through to enqueue */
+        }
+      }
+      await idb.enqueue({ type: 'saveTrip', trip: row });
+    },
+    [online, settings.appsScriptUrl, settings.apiKey]
+  );
+
   const saveTrip = useCallback(
     async (trip, photoFiles = []) => {
-      const record = {
+      const isNew = !trip.ID;
+      let record = {
         ...trip,
         ID: trip.ID || `t_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       };
+
+      // Auto-fill straight-line distance when not supplied.
+      if (!record.Distance_KM) {
+        const km = tripDistanceKm(record);
+        if (km > 0) record.Distance_KM = String(km);
+      }
+
+      // Implicit reset: a brand-new leg departing from home may need to
+      // auto-close a still-open earlier trip.
+      let closed = null;
+      if (isNew) {
+        const res = processNewVectorLeg(record, trips, settings.homeLocation);
+        record = res.leg;
+        closed = res.closed;
+      }
+      if (closed) {
+        await idb.putTrip(closed);
+        setTrips((prev) => prev.map((t) => (t.ID === closed.ID ? closed : t)));
+        await persistRow(closed);
+        notify(`Auto-closed your open ${closed.City} trip`, 'info');
+      }
+
       await idb.putTrip(record);
       setTrips((prev) => {
         const i = prev.findIndex((t) => t.ID === record.ID);
@@ -218,16 +272,7 @@ export function AppProvider({ children }) {
         return next;
       });
 
-      // Sync the row itself.
-      if (online && settings.appsScriptUrl) {
-        try {
-          await api.saveTrip(settings.appsScriptUrl, record, settings.apiKey);
-        } catch {
-          await idb.enqueue({ type: 'saveTrip', trip: record });
-        }
-      } else {
-        await idb.enqueue({ type: 'saveTrip', trip: record });
-      }
+      await persistRow(record);
 
       // Sequentially stream any photos (one HTTP request per file).
       if (photoFiles.length && online && settings.appsScriptUrl) {
@@ -237,7 +282,33 @@ export function AppProvider({ children }) {
       }
       return record;
     },
-    [online, settings.appsScriptUrl, settings.apiKey, notify]
+    [online, settings.appsScriptUrl, settings.apiKey, settings.homeLocation, trips, persistRow, notify]
+  );
+
+  // ── Ticket parsing: sequential queue, one HTTP request per file ────────────
+  const parseTickets = useCallback(
+    async (files) => {
+      if (!settings.appsScriptUrl) {
+        notify('Set your Apps Script URL first', 'warn');
+        return [{ error: 'No backend configured' }];
+      }
+      const results = [];
+      for (const file of files) {
+        try {
+          const { base64, mime } = await fileToBase64(file);
+          const data = await api.parseTicket(
+            settings.appsScriptUrl,
+            { base64, mime, filename: file.name },
+            settings.apiKey
+          );
+          results.push(data.parsed || data);
+        } catch (e) {
+          results.push({ error: e.message });
+        }
+      }
+      return results;
+    },
+    [settings.appsScriptUrl, settings.apiKey, notify]
   );
 
   // Sequential streaming queue — strictly one file per request.
@@ -370,6 +441,7 @@ export function AppProvider({ children }) {
     usingCustomHolidays,
     refreshFromSheet,
     verifyConnection,
+    parseTickets,
     saveTrip,
     uploadPhotos,
     deleteTrip,
