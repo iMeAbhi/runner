@@ -55,6 +55,10 @@ html[data-theme='amoled'] .glass-strong,
 html[data-theme='amoled'] .dropdown-surface {
   border-color: rgb(255 255 255 / 0.1);
 }
+/* No ambient accent blooms on AMOLED — the canvas stays true pitch-black. */
+html[data-theme='amoled'] .ambient-bloom {
+  display: none;
+}
 
 /* Clean Light — warm pastel + milk glass, sunlight-readable */
 html[data-theme='light'] {
