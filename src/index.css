@@ -20,12 +20,12 @@
   --ink: 245 247 250;
   --ink-dim: 160 170 185;
   --glass: 255 255 255; /* tint used for frosted surfaces */
-  --glass-alpha: 0.08;
-  --border-alpha: 0.1;
+  --glass-alpha: 0.05;
+  --border-alpha: 0.12;
   --bg-image: radial-gradient(120% 120% at 50% 0%, #0a0f1f 0%, #000 60%);
 }
 
-/* AMOLED — pure black with neon glow */
+/* AMOLED — absolute pure black with sharp neon glow */
 html[data-theme='amoled'] {
   --accent: 0 229 255;
   --accent-2: 124 77 255;
@@ -33,9 +33,9 @@ html[data-theme='amoled'] {
   --ink: 255 255 255;
   --ink-dim: 150 158 170;
   --glass: 255 255 255;
-  --glass-alpha: 0.06;
-  --border-alpha: 0.12;
-  --bg-image: radial-gradient(140% 100% at 50% -10%, #07101c 0%, #000 55%);
+  --glass-alpha: 0.045;
+  --border-alpha: 0.14;
+  --bg-image: #000000; /* true #000 — no tinted gradient */
 }
 
 /* Clean Light — warm pastel + milk glass, sunlight-readable */
@@ -58,12 +58,28 @@ html[data-theme='mood'] {
   --ink: 245 240 250;
   --ink-dim: 165 160 180;
   --glass: 255 255 255;
-  --glass-alpha: 0.08;
+  --glass-alpha: 0.05;
   --border-alpha: 0.12;
   --bg-image: radial-gradient(
     120% 120% at 50% 0%,
     rgb(var(--accent) / 0.22) 0%,
     rgb(var(--canvas)) 55%
+  );
+}
+
+/* Material Mood — Light base variant (toggled in Settings). Milk glass on a
+   pale accent-tinted canvas; the accent pair still comes from the travel accent. */
+html[data-theme='mood'][data-mood-base='light'] {
+  --canvas: 244 243 250;
+  --ink: 24 22 34;
+  --ink-dim: 96 96 112;
+  --glass: 255 255 255;
+  --glass-alpha: 0.55;
+  --border-alpha: 0.5;
+  --bg-image: radial-gradient(
+    120% 120% at 50% 0%,
+    rgb(var(--accent) / 0.25) 0%,
+    rgb(var(--canvas)) 58%
   );
 }
 
@@ -141,6 +157,16 @@ body {
   }
   .pill {
     @apply rounded-full px-4 py-2 text-sm font-semibold transition-all;
+  }
+  /* Floating menu surface (custom dropdowns). Tints from the canvas variable so
+     it reads dark on dark themes (~black/80) and light on the Light theme
+     (~white/80) automatically. */
+  .dropdown-surface {
+    background: rgb(var(--canvas) / 0.82);
+    border: 1px solid rgb(var(--glass) / calc(var(--border-alpha) + 0.06));
+    -webkit-backdrop-filter: blur(24px) saturate(170%);
+    backdrop-filter: blur(24px) saturate(170%);
+    box-shadow: theme('boxShadow.glass-lg');
   }
 }
 

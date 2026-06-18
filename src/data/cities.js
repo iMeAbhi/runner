@@ -53,6 +53,12 @@ export const CITY_TO_REGION = {
   'Kathmandu': 'Nepal', 'Pokhara': 'Nepal', 'Ubud': 'Bali, Indonesia', 'Denpasar': 'Bali, Indonesia', 'Bangkok': 'Thailand', 'Phuket': 'Thailand', 'Chiang Mai': 'Thailand',
   'Singapore': 'Singapore', 'Kuala Lumpur': 'Malaysia', 'Dubai': 'UAE', 'Abu Dhabi': 'UAE', 'Colombo': 'Sri Lanka', 'Kandy': 'Sri Lanka', 'Male': 'Maldives',
   'Paris': 'France', 'London': 'United Kingdom', 'Rome': 'Italy', 'Tokyo': 'Japan', 'New York': 'USA',
+  // ── Global macro-hubs (surface in the custom autocomplete; coords in geo.js) ──
+  'Hong Kong': 'Hong Kong', 'Macau': 'Macau', 'Shanghai': 'China', 'Beijing': 'China',
+  'Sydney': 'Australia', 'Melbourne': 'Australia', 'Seoul': 'South Korea', 'Osaka': 'Japan',
+  'Jakarta': 'Indonesia', 'Bali': 'Bali, Indonesia', 'Doha': 'Qatar', 'Thimphu': 'Bhutan',
+  'Amsterdam': 'Netherlands', 'Zurich': 'Switzerland', 'Istanbul': 'Türkiye',
+  'San Francisco': 'USA', 'Toronto': 'Canada',
 };
 
 // Sorted unique city names for the <datalist> suggestions.

@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS = {
   driveFolderUrl: '', // master Drive folder; trip sub-folders are created inside it
   theme: 'amoled', // amoled | light | mood | sky
   accent: 'aviation',
+  moodBase: 'dark', // Material Mood base canvas: 'light' | 'dark'
   holidayText: '', // pasted corporate list (overrides defaults when present)
   leaves: { Casual: 12, Privilege: 18, Sick: 12 },
   leavesUsed: { Casual: 0, Privilege: 0, Sick: 0 },
@@ -107,6 +108,10 @@ export function AppProvider({ children }) {
     if (settings.theme === 'sky') root.setAttribute('data-time', band);
     else root.removeAttribute('data-time');
 
+    // Material Mood can run on a light or dark base canvas.
+    if (settings.theme === 'mood') root.setAttribute('data-mood-base', settings.moodBase || 'dark');
+    else root.removeAttribute('data-mood-base');
+
     // Mood theme drives its accent from the chosen travel accent.
     if (settings.theme === 'mood' || settings.theme === 'amoled') {
       const a = ACCENTS[settings.accent] || ACCENTS.aviation;
@@ -121,7 +126,7 @@ export function AppProvider({ children }) {
       root.style.removeProperty('--accent');
       root.style.removeProperty('--accent-2');
     }
-  }, [settings.theme, settings.accent, band]);
+  }, [settings.theme, settings.accent, settings.moodBase, band]);
 
   // ── Sky clock: re-evaluate the band every minute ───────────────────────────
   useEffect(() => {

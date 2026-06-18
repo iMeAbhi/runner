@@ -4,7 +4,8 @@ import { useApp } from '../context/AppContext.jsx';
 import { compressMany } from '../utils/imageCompress.js';
 import { CITY_NAMES, regionForCity } from '../data/cities.js';
 import { CloseIcon, CalendarIcon } from './Icons.jsx';
-import { parseISO, toISO } from '../utils/dates.js';
+import { toISO } from '../utils/dates.js';
+import CityCombobox from './CityCombobox.jsx';
 
 // "Car" replaces the old "Cab" — every car ride is logged as a road trip.
 const MODES = ['Flight', 'Train', 'Car', 'Bus', 'Walk'];
@@ -86,12 +87,12 @@ export default function TripForm({ initial, onClose }) {
     });
   const setEnd = (iso) => setForm((f) => ({ ...f, End_Date: iso }));
 
-  const onCityChange = (e) => {
-    const City = e.target.value;
+  // Destination city changed (string from the custom combobox). Autofills the
+  // State/Country when empty or still holding the last suggestion.
+  const handleCity = (City) => {
     setForm((f) => {
       const region = regionForCity(City);
       const next = { ...f, City };
-      // Autofill only if the field is empty or still holds the last suggestion.
       if (region && (!f.State_Country || f.State_Country === autoRegion)) {
         next.State_Country = region;
       }
@@ -153,16 +154,9 @@ export default function TripForm({ initial, onClose }) {
           <input type="file" accept="image/*,application/pdf" multiple onChange={onImport} className="hidden" disabled={importing} />
         </label>
 
-        {/* Suggestions for the City field; selecting one autofills State/Country. */}
-        <datalist id="city-suggestions">
-          {CITY_NAMES.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
-
         <div className="grid grid-cols-2 gap-3">
-          <Field className="col-span-2" label="From (origin)" value={form.Origin_City} onChange={set('Origin_City')} list="city-suggestions" placeholder="e.g. Hyderabad" autoComplete="off" />
-          <Field className="col-span-2" label="City (destination)" value={form.City} onChange={onCityChange} list="city-suggestions" placeholder="Start typing… e.g. Leh" autoComplete="off" />
+          <CityCombobox className="col-span-2" label="From (origin)" value={form.Origin_City} onChange={(v) => setForm((f) => ({ ...f, Origin_City: v }))} options={CITY_NAMES} placeholder="e.g. Hyderabad" />
+          <CityCombobox className="col-span-2" label="City (destination)" value={form.City} onChange={handleCity} options={CITY_NAMES} placeholder="Start typing… e.g. Leh" />
           <Field className="col-span-2" label="State / Country (auto-fills)" value={form.State_Country} onChange={set('State_Country')} placeholder="e.g. Ladakh — or any country for global trips" />
           <DateField label="Start" value={form.Start_Date} onChange={setStart} />
           <DateField label="End" value={form.End_Date} onChange={setEnd} min={form.Start_Date} />
@@ -241,65 +235,55 @@ export default function TripForm({ initial, onClose }) {
   );
 }
 
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+// ── DD / MM / YYYY input mask ────────────────────────────────────────────────
+// Mobile-first: numeric keypad, digits auto-structure into "DD / MM / YYYY", and
+// the value syncs to the DB as YYYY-MM-DD. The " / " separators are inserted as
+// each group begins (so backspace stays sane), and the calendar button remains.
 
-/** Format an ISO date as a friendly, typable string e.g. "04 Jun 2023". */
-function fmtTyped(iso) {
+/** Group raw input down to <=8 digits and join with " / " → "DD / MM / YYYY". */
+function maskFromDigits(raw) {
+  const d = String(raw).replace(/\D/g, '').slice(0, 8);
+  return [d.slice(0, 2), d.slice(2, 4), d.slice(4, 8)].filter(Boolean).join(' / ');
+}
+
+/** ISO (YYYY-MM-DD) → masked display "DD / MM / YYYY" ('' when unset). */
+function maskFromIso(iso) {
   if (!iso) return '';
-  const d = parseISO(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()].replace(/^./, (c) => c.toUpperCase())} ${d.getFullYear()}`;
+  const [y, m, d] = iso.split('-');
+  return y && m && d ? `${d} / ${m} / ${y}` : '';
+}
+
+/** Masked "DD / MM / YYYY" → valid ISO YYYY-MM-DD, or '' if incomplete/invalid. */
+function isoFromMask(text) {
+  const d = String(text).replace(/\D/g, '');
+  if (d.length !== 8) return '';
+  const day = +d.slice(0, 2);
+  const mon = +d.slice(2, 4);
+  const yr = +d.slice(4, 8);
+  if (mon < 1 || mon > 12 || day < 1 || day > 31) return '';
+  const dt = new Date(yr, mon - 1, day);
+  // Reject impossible calendar dates (e.g. 31 / 02).
+  if (dt.getFullYear() !== yr || dt.getMonth() !== mon - 1 || dt.getDate() !== day) return '';
+  return toISO(dt);
 }
 
 /**
- * Loosely parse a hand-typed date into ISO (YYYY-MM-DD), or '' if unparseable.
- * Accepts: 2023-06-04, 04/06/2023, 4-6-2023, "4 Jun 2023", "June 4 2023".
- */
-function parseTyped(raw) {
-  const s = (raw || '').trim().toLowerCase();
-  if (!s) return '';
-  // ISO first.
-  const iso = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
-  if (iso) return mk(+iso[1], +iso[2], +iso[3]);
-  // Month name anywhere (e.g. "4 jun 2023" or "june 4 2023").
-  const monIdx = MONTHS.findIndex((m) => s.includes(m));
-  if (monIdx !== -1) {
-    const nums = s.match(/\d+/g) || [];
-    const day = nums.find((n) => +n >= 1 && +n <= 31);
-    const year = nums.find((n) => n.length === 4) || nums.find((n) => +n > 31);
-    if (day && year) return mk(+year, monIdx + 1, +day);
-  }
-  // Numeric DD MM YYYY (day-first, common in India).
-  const parts = s.split(/[-/. ]+/).filter(Boolean);
-  if (parts.length === 3 && parts.every((p) => /^\d+$/.test(p))) {
-    let [d, m, y] = parts.map(Number);
-    if (y < 100) y += 2000;
-    return mk(y, m, d);
-  }
-  return '';
-}
-
-function mk(y, m, d) {
-  if (!y || !m || !d || m < 1 || m > 12 || d < 1 || d > 31) return '';
-  return toISO(new Date(y, m - 1, d));
-}
-
-/**
- * Date input you can either type into ("4 Jun 2023") or pick from the native
- * calendar (📅 button → showPicker). Typing avoids scrolling the calendar back
- * years; the calendar respects `min` so the End date can't precede the Start.
+ * Smart masked date field. Type digits (08022026 → "08 / 02 / 2026") or tap the
+ * calendar (📅 → showPicker). `min` keeps the End date from preceding the Start.
  */
 function DateField({ label, value, onChange, min, className = 'col-span-1' }) {
   const ref = useRef(null);
-  const [text, setText] = useState(fmtTyped(value));
-  // Re-sync the text whenever the canonical value changes from outside (e.g.
-  // Start auto-filling End, or the calendar picker).
-  useEffect(() => setText(fmtTyped(value)), [value]);
+  const [text, setText] = useState(maskFromIso(value));
+  // Re-sync when the canonical value changes externally (Start auto-fills End,
+  // or the calendar picker sets a date).
+  useEffect(() => setText(maskFromIso(value)), [value]);
 
-  const commit = () => {
-    const iso = parseTyped(text);
+  const onType = (e) => {
+    const masked = maskFromDigits(e.target.value);
+    setText(masked);
+    const iso = isoFromMask(masked);
     if (iso) onChange(iso);
-    else setText(fmtTyped(value)); // revert unparseable input
+    else if (masked === '') onChange('');
   };
 
   return (
@@ -310,15 +294,8 @@ function DateField({ label, value, onChange, min, className = 'col-span-1' }) {
           type="text"
           inputMode="numeric"
           value={text}
-          onChange={(e) => setText(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              commit();
-            }
-          }}
-          placeholder="04 Jun 2023"
+          onChange={onType}
+          placeholder="DD / MM / YYYY"
           className="min-w-0 flex-1 bg-transparent text-sm font-medium text-ink outline-none placeholder:text-ink-dim/60"
         />
         <button

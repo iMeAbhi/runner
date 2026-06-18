@@ -124,6 +124,26 @@ export default function Settings() {
           ))}
         </div>
         {settings.theme === 'mood' && (
+          <Labeled label="Mood base">
+            <div className="flex gap-2">
+              {['light', 'dark'].map((base) => (
+                <button
+                  key={base}
+                  onClick={() => updateSettings({ moodBase: base })}
+                  className="flex-1 rounded-3xl px-3 py-2 text-sm font-semibold capitalize text-ink glass"
+                  style={
+                    (settings.moodBase || 'dark') === base
+                      ? { boxShadow: '0 0 0 2px rgb(var(--accent))', background: 'rgb(var(--accent) / 0.18)' }
+                      : undefined
+                  }
+                >
+                  {base}
+                </button>
+              ))}
+            </div>
+          </Labeled>
+        )}
+        {settings.theme === 'mood' && (
           <Labeled label="Travel accent">
             <div className="flex flex-wrap gap-2">
               {Object.entries(ACCENTS).map(([id, a]) => (
