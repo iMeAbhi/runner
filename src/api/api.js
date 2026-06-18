@@ -71,6 +71,10 @@ async function post(baseUrl, payload, token = '') {
 export const parseTicket = (baseUrl, { base64, mime, filename }, token) =>
   post(baseUrl, { action: 'parseTicket', base64, mime, filename }, token);
 
+/** Manually trigger the calendar import. Returns { imported, firstSync }. */
+export const syncCalendar = (baseUrl, token) =>
+  post(baseUrl, { action: 'syncCalendar' }, token);
+
 /** Upsert a trip row (no media). Returns { trip }. */
 export const saveTrip = (baseUrl, trip, token) =>
   post(baseUrl, { action: 'saveTrip', trip }, token);

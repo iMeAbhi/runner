@@ -73,6 +73,13 @@ export default function CityCard({ trip, status, onOpen }) {
           )}
         </div>
 
+        {/* Calendar-sync flag: imported from Google Calendar (still fully editable). */}
+        {trip.Google_Event_ID && (
+          <div className="mt-2 mr-2 inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-md">
+            📅 Calendar Sync
+          </div>
+        )}
+
         {/* Implicit-reset flag: this trip's return date was auto-filled. */}
         {trip.autoClosed && (
           <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-400/20 px-2.5 py-1 text-[11px] font-semibold text-amber-100 ring-1 ring-amber-300/40">

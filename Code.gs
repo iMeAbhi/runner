@@ -74,18 +74,23 @@ function getSecret() {
   return getConfigValue('SHARED_SECRET');
 }
 
-/** Write/replace the shared secret in the Config tab; returns the value. */
-function setSecret(value) {
+/** Write/replace any key/value in the Config tab; returns the value. */
+function setConfigValue(key, value) {
   var sheet = getConfigSheet();
   var values = sheet.getDataRange().getValues();
   for (var r = 1; r < values.length; r++) {
-    if (String(values[r][0]).trim() === 'SHARED_SECRET') {
+    if (String(values[r][0]).trim() === key) {
       sheet.getRange(r + 1, 2).setValue(value);
       return value;
     }
   }
-  sheet.appendRow(['SHARED_SECRET', value]);
+  sheet.appendRow([key, value]);
   return value;
+}
+
+/** Write/replace the shared secret in the Config tab; returns the value. */
+function setSecret(value) {
+  return setConfigValue('SHARED_SECRET', value);
 }
 
 /** A long random key (two UUIDs, hyphens stripped → 64 hex chars). */
@@ -133,6 +138,8 @@ var TRIP_HEADERS = [
   'Transport_Mode', 'Accommodation', 'Drive_Folder_URL', 'Photo_URLs',
   // Multi-vector track model (appended; existing rows read blank for these).
   'Origin_City', 'Operator_Name', 'Distance_KM', 'Layovers', 'Layover_Count_As_Visit',
+  // Calendar sync: the source event id(s) — also flags a row as calendar-imported.
+  'Google_Event_ID',
 ];
 var HOLIDAY_HEADERS = ['Date', 'Holiday_Name'];
 
@@ -236,6 +243,8 @@ function doPost(e) {
         return json(syncFolder(body));
       case 'parseTicket':
         return json(parseUploadedTicket(body));
+      case 'syncCalendar':
+        return json(syncTripsFromCalendar(body));
       default:
         return json({ error: 'Unknown action: ' + body.action });
     }
@@ -467,4 +476,150 @@ function parseUploadedTicket(body) {
     }
   }
   return { parsed: parsed };
+}
+
+// ── Google Calendar sync (manual trigger only) ───────────────────────────────
+/**
+ * Crawl the user's default Google Calendar and import travel into the Trips tab.
+ * MANUAL ONLY — invoked by the Timeline "📅 Calendar" button (action=syncCalendar);
+ * there is no time-driven trigger.
+ *
+ *  • First sync (sheet empty or no CAL_LAST_SYNC in Config) crawls 4 YEARS back to
+ *    today (+7 days) for full history; later syncs only scan since the last run
+ *    (with a 2-day overlap buffer).
+ *  • Dedupe: each imported row stores its source Google_Event_ID(s); events whose
+ *    id is already present are skipped instantly.
+ *  • 48-hour merge: a transport leg (flight/train/…) absorbs any lodging/onward leg
+ *    to the SAME city starting within 48h — Start_Date = the leg's departure,
+ *    End_Date = the latest checkout. Both event ids are recorded on the row.
+ *
+ * First run will prompt for Calendar authorization (re-run setup() or just tap the
+ * button and approve). Nothing leaves the user's Google account.
+ */
+function syncTripsFromCalendar(body) {
+  var cal = CalendarApp.getDefaultCalendar();
+  if (!cal) return { error: 'No default Google Calendar available' };
+  var sheet = getSheet(TRIPS_TAB, TRIP_HEADERS);
+  var tz = Session.getScriptTimeZone();
+
+  // Already-imported event ids (cells may hold a comma-joined merge of ids).
+  var data = sheet.getDataRange().getValues();
+  var idCol = data[0].indexOf('Google_Event_ID');
+  var seen = {};
+  for (var r = 1; r < data.length; r++) {
+    var cell = idCol >= 0 ? String(data[r][idCol] || '') : '';
+    cell.split(',').forEach(function (id) {
+      var t = id.trim();
+      if (t) seen[t] = true;
+    });
+  }
+
+  // Crawl window — deep on first sync, incremental afterward.
+  var now = new Date();
+  var lastSync = getConfigValue('CAL_LAST_SYNC');
+  var firstSync = data.length < 2 || !lastSync;
+  var start = firstSync
+    ? new Date(now.getFullYear() - 4, now.getMonth(), now.getDate())
+    : new Date(new Date(lastSync).getTime() - 2 * 864e5); // last run − 2 days
+  var end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
+
+  var events = cal.getEvents(start, end);
+  var legs = [];
+  var stays = [];
+  for (var i = 0; i < events.length; i++) {
+    if (seen[events[i].getId()]) continue;
+    var kind = classifyCalEvent(events[i]);
+    if (kind === 'transport') legs.push(events[i]);
+    else if (kind === 'lodging') stays.push(events[i]);
+  }
+
+  var rows = [];
+  var usedStay = {};
+
+  // Each transport leg becomes a trip, merging a same-city stay within 48h.
+  for (var j = 0; j < legs.length; j++) {
+    var leg = legs[j];
+    var city = extractCity(leg);
+    var legStart = leg.getStartTime();
+    var tripEnd = leg.getEndTime();
+    var windowEnd = new Date(legStart.getTime() + 48 * 3600 * 1000);
+    var ids = [leg.getId()];
+    for (var k = 0; k < stays.length; k++) {
+      var stay = stays[k];
+      if (usedStay[stay.getId()]) continue;
+      if (stay.getStartTime() >= legStart && stay.getStartTime() <= windowEnd && cityMatches(stay, city)) {
+        if (stay.getEndTime() > tripEnd) tripEnd = stay.getEndTime(); // checkout = End_Date
+        usedStay[stay.getId()] = true;
+        ids.push(stay.getId());
+      }
+    }
+    rows.push(buildCalRow(leg, city, legStart, tripEnd, ids, tz));
+  }
+
+  // Unmatched lodging → standalone stay trips (so hotel-only trips still appear).
+  for (var m = 0; m < stays.length; m++) {
+    if (usedStay[stays[m].getId()]) continue;
+    var s = stays[m];
+    rows.push(buildCalRow(s, extractCity(s), s.getStartTime(), s.getEndTime(), [s.getId()], tz));
+  }
+
+  for (var n = 0; n < rows.length; n++) saveTrip(rows[n]);
+
+  setConfigValue('CAL_LAST_SYNC', Utilities.formatDate(now, tz, "yyyy-MM-dd'T'HH:mm:ss"));
+  return { imported: rows.length, firstSync: firstSync, scannedFrom: Utilities.formatDate(start, tz, 'yyyy-MM-dd') };
+}
+
+/** Classify a calendar event as 'transport' | 'lodging' | 'other' by its title. */
+function classifyCalEvent(ev) {
+  var t = ((ev.getTitle() || '') + ' ' + (ev.getLocation() || '')).toLowerCase();
+  if (/\b(flight|fly|airport|airlines?|indigo|vistara|air india|spicejet|akasa|emirates|train|rail|express|vande bharat|shatabdi|rajdhani|bus|volvo|coach|road trip|drive to)\b/.test(t)) {
+    return 'transport';
+  }
+  if (/\b(hotel|resort|reservation|stay|inn|lodge|airbnb|villa|homestay|check[- ]?in|check[- ]?out|booking)\b/.test(t)) {
+    return 'lodging';
+  }
+  return 'other';
+}
+
+/** Best-effort destination city: "… to <City>", else the event location, else title. */
+function extractCity(ev) {
+  var title = ev.getTitle() || '';
+  var m = title.match(/\bto\s+([A-Za-z][A-Za-z .'\-]+)/);
+  if (m) return m[1].trim().replace(/[,.]+$/, '');
+  var loc = ev.getLocation() || '';
+  if (loc) return loc.split(',')[0].trim();
+  return title.trim();
+}
+
+/** Does a lodging event belong to `city`? (title or location mentions it). */
+function cityMatches(stay, city) {
+  if (!city) return false;
+  var hay = ((stay.getTitle() || '') + ' ' + (stay.getLocation() || '')).toLowerCase();
+  return hay.indexOf(city.toLowerCase()) !== -1;
+}
+
+/** Map a transport event title to a Transport_Mode. */
+function calTransportMode(ev) {
+  var t = (ev.getTitle() || '').toLowerCase();
+  if (/train|rail|express|vande bharat|shatabdi|rajdhani/.test(t)) return 'Train';
+  if (/bus|volvo|coach/.test(t)) return 'Bus';
+  if (/road trip|drive|car|cab|taxi/.test(t)) return 'Car';
+  return 'Flight';
+}
+
+/** Build a [CAL]-tagged trip row from an event + merge metadata. */
+function buildCalRow(ev, city, startTime, endTime, eventIds, tz) {
+  var trip = {};
+  trip.ID = 'cal_' + ev.getId();
+  trip.City = city || ev.getTitle() || 'Trip';
+  trip.State_Country = ''; // left blank; the app autofills on edit
+  trip.Origin_City = '';
+  trip.Start_Date = Utilities.formatDate(startTime, tz, 'yyyy-MM-dd');
+  trip.End_Date = Utilities.formatDate(endTime, tz, 'yyyy-MM-dd');
+  trip.Transport_Mode = classifyCalEvent(ev) === 'transport' ? calTransportMode(ev) : '';
+  trip.Operator_Name = '';
+  trip.Accommodation = '[CAL] imported from Google Calendar';
+  trip.Layover_Count_As_Visit = 'FALSE';
+  trip.Google_Event_ID = (eventIds || [ev.getId()]).join(',');
+  return trip;
 }

@@ -21,7 +21,7 @@ function statusOf(trip) {
 }
 
 export default function TimelineFeed() {
-  const { trips, refreshFromSheet, syncing } = useApp();
+  const { trips, refreshFromSheet, syncCalendar, syncing } = useApp();
   const [selected, setSelected] = useState(null);
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -45,9 +45,14 @@ export default function TimelineFeed() {
           <h1 className="text-3xl font-black">Timeline</h1>
           <p className="text-sm text-ink-dim">{trips.length} trips logged</p>
         </div>
-        <button onClick={refreshFromSheet} className="glass rounded-full px-4 py-2 text-xs font-bold text-ink" disabled={syncing}>
-          {syncing ? 'Syncing…' : 'Sync'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={syncCalendar} className="glass rounded-full px-3 py-2 text-xs font-bold text-ink" disabled={syncing} aria-label="Sync calendar">
+            📅 Calendar
+          </button>
+          <button onClick={refreshFromSheet} className="glass rounded-full px-4 py-2 text-xs font-bold text-ink" disabled={syncing}>
+            {syncing ? 'Syncing…' : 'Sync'}
+          </button>
+        </div>
       </header>
 
       {gap !== null && gap > 90 && <NudgeBanner days={gap} />}

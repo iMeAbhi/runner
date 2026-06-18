@@ -184,6 +184,30 @@ export function AppProvider({ children }) {
     }
   }, [settings.appsScriptUrl, settings.apiKey, notify]);
 
+  // ── Manual calendar import (Timeline "📅 Calendar" button) ─────────────────
+  // Triggers the Apps Script crawl, then re-pulls the sheet so imported trips show.
+  const syncCalendar = useCallback(async () => {
+    if (!settings.appsScriptUrl) {
+      notify('Set your Apps Script URL in Settings first', 'warn');
+      return;
+    }
+    setSyncing(true);
+    try {
+      const res = await api.syncCalendar(settings.appsScriptUrl, settings.apiKey);
+      if (res.error) throw new Error(res.error);
+      const { trips: remoteTrips } = await api.fetchAll(settings.appsScriptUrl, settings.apiKey);
+      await idb.clearTrips();
+      await idb.putTrips(remoteTrips);
+      setTrips(remoteTrips);
+      await idb.setMeta('lastSync', Date.now());
+      notify(`Calendar synced — ${res.imported || 0} trip(s) imported`, 'ok');
+    } catch (e) {
+      notify(`Calendar sync failed: ${e.message}`, 'error');
+    } finally {
+      setSyncing(false);
+    }
+  }, [settings.appsScriptUrl, settings.apiKey, notify]);
+
   // ── Verify URL + key without side effects (Settings "Verify" button) ───────
   const verifyConnection = useCallback(async () => {
     if (!settings.appsScriptUrl) {
@@ -445,6 +469,7 @@ export function AppProvider({ children }) {
     activeHolidays,
     usingCustomHolidays,
     refreshFromSheet,
+    syncCalendar,
     verifyConnection,
     parseTickets,
     saveTrip,
