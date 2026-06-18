@@ -34,8 +34,26 @@ html[data-theme='amoled'] {
   --ink-dim: 150 158 170;
   --glass: 255 255 255;
   --glass-alpha: 0.045;
-  --border-alpha: 0.14;
+  --border-alpha: 0.1; /* hairline white/10 lines */
   --bg-image: #000000; /* true #000 — no tinted gradient */
+}
+
+/* ─── Absolute AMOLED blackout ───────────────────────────────────────────────
+   Strip every neon glow / drop-shadow and vibrant accent ring so surfaces read
+   as flat pitch-black with crisp white/10 hairline borders. Done at the theme
+   level (not per-component) so it covers class-based AND inline glow styles. */
+html[data-theme='amoled'] *,
+html[data-theme='amoled'] *::before,
+html[data-theme='amoled'] *::after {
+  box-shadow: none !important;
+}
+html[data-theme='amoled'] [style*='drop-shadow'] {
+  filter: none !important;
+}
+html[data-theme='amoled'] .glass,
+html[data-theme='amoled'] .glass-strong,
+html[data-theme='amoled'] .dropdown-surface {
+  border-color: rgb(255 255 255 / 0.1);
 }
 
 /* Clean Light — warm pastel + milk glass, sunlight-readable */

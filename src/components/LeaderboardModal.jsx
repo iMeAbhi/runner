@@ -21,7 +21,7 @@ export default function LeaderboardModal({ isOpen, onClose, title, items = [] })
               animate={{ y: 0, opacity: 1, scale: 1 }}
               exit={{ y: 60, opacity: 0, scale: 0.97 }}
               transition={{ type: 'spring', stiffness: 320, damping: 32 }}
-              className="relative z-10 w-full max-w-md rounded-t-4xl border border-white/15 bg-black/40 p-5 backdrop-blur-xl sm:rounded-4xl"
+              className="dropdown-surface relative z-10 w-full max-w-md rounded-t-4xl p-5 sm:rounded-4xl"
             >
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-extrabold text-ink">{title}</h2>
@@ -40,7 +40,8 @@ export default function LeaderboardModal({ isOpen, onClose, title, items = [] })
                       initial={{ opacity: 0, x: -12 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.05 }}
-                      className="flex items-center gap-3 rounded-3xl border border-white/10 bg-white/[0.06] px-3 py-2.5"
+                      className="flex items-center gap-3 rounded-3xl px-3 py-2.5"
+                      style={{ background: 'rgb(var(--ink) / 0.05)', border: '1px solid rgb(var(--ink) / 0.12)' }}
                     >
                       <span
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-black"

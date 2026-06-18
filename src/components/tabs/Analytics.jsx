@@ -12,6 +12,7 @@ import {
   topOperators,
   longestTrips,
   topDestinations,
+  classifyTransport,
 } from '../../utils/insights.js';
 import { fmtRange } from '../../utils/dates.js';
 import LeaderboardModal from '../LeaderboardModal.jsx';
@@ -41,8 +42,28 @@ export default function Analytics() {
   }, [trips, filter, range]);
 
   const stats = useMemo(() => computeStats(filtered), [filtered]);
-  const distance = useMemo(() => distanceTotals(filtered), [filtered]);
+  const distance = useMemo(() => distanceTotals(filtered, settings.homeLocation), [filtered, settings.homeLocation]);
   const [modal, setModal] = useState(null); // { title, items } | null
+
+  // Drill-down openers for the metric grid.
+  const openCities = () =>
+    setModal({ title: 'Cities visited', items: stats.cityCounts.map((c) => ({ name: c.name, value: `(${c.count})` })) });
+  const openStates = () =>
+    setModal({ title: 'Indian States & UTs cleared', items: stats.statesList.map((s) => ({ name: s, value: '✓' })) });
+  const openCountries = () =>
+    setModal({ title: 'Countries touched', items: stats.countriesList.map((c) => ({ name: c, value: '✓' })) });
+  const openLedger = (modeKey, title) =>
+    setModal({
+      title,
+      items: filtered
+        .filter((t) => classifyTransport(t.Transport_Mode) === modeKey)
+        .sort((a, b) => (a.Start_Date < b.Start_Date ? 1 : -1))
+        .map((t) => ({
+          name: t.Origin_City ? `${t.Origin_City} → ${t.City}` : t.City || '—',
+          value: t.Operator_Name || '—',
+          sub: t.Start_Date ? fmtRange(t.Start_Date, t.End_Date) : '',
+        })),
+    });
 
   // Life-moment insights are inherently lifetime, so they ignore the date filter.
   const home = useMemo(() => placeVisits(trips, settings.homeLocation), [trips, settings.homeLocation]);
@@ -88,7 +109,7 @@ export default function Analytics() {
       <div className="space-y-2">
         <DistanceBar label="Air distance ✈️" km={distance.air} max={distance.total} />
         <DistanceBar label="Rail distance 🚆" km={distance.rail} max={distance.total} />
-        <DistanceBar label="Ground distance 🚗" km={distance.ground} max={distance.total} />
+        <DistanceBar label="Road distance 🚗" km={distance.ground} max={distance.total} />
       </div>
 
       {/* Top-5 leaderboards */}
@@ -100,13 +121,13 @@ export default function Analytics() {
 
       {/* Metrics grid — re-animates whenever the filter morphs the dataset */}
       <motion.div key={filter + filtered.length} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className="grid grid-cols-2 gap-3">
-        <Stat big value={stats.uniqueCities} label="Cities" />
-        <Stat big value={stats.uniqueStates} label="Indian States & UTs" />
-        <Stat value={stats.uniqueCountries} label="Countries 🌍" />
+        <Stat big value={stats.uniqueCities} label="Cities" onClick={openCities} />
+        <Stat big value={stats.uniqueStates} label="Indian States & UTs" onClick={openStates} />
+        <Stat value={stats.uniqueCountries} label="Countries 🌍" onClick={openCountries} />
         <Stat value={stats.hotels} label="Hotel stays 🏨" />
-        <Stat value={stats.flights} label="Flights ✈️" />
-        <Stat value={stats.trains} label="Trains 🚆" />
-        <Stat value={stats.cabs} label="Road trips 🚗" />
+        <Stat value={stats.flights} label="Flights ✈️" onClick={() => openLedger('flight', 'Flights ✈️')} />
+        <Stat value={stats.trains} label="Trains 🚆" onClick={() => openLedger('train', 'Trains 🚆')} />
+        <Stat value={stats.cabs} label="Road trips 🚗" onClick={() => openLedger('cab', 'Road trips 🚗')} />
         <Stat
           value={stats.topMode ? stats.topMode.count : 0}
           label={stats.topMode ? `Most used · ${stats.topMode.label}` : 'Most-used ride'}
@@ -127,11 +148,11 @@ export default function Analytics() {
           )}
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <div className="glass rounded-4xl p-4">
+          <button onClick={openCities} className="glass rounded-4xl p-4 text-left transition-transform active:scale-95">
             <p className="text-xs font-semibold uppercase tracking-wide text-ink-dim">Most-visited hub</p>
             <p className="mt-1 text-lg font-bold text-ink">{stats.topCity ? `${stats.topCity.name}` : '—'}</p>
             {stats.topCity && <p className="text-xs text-ink-dim">{stats.topCity.count} visits</p>}
-          </div>
+          </button>
           <div className="glass rounded-4xl p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-ink-dim">Top region</p>
             <p className="mt-1 text-lg font-bold text-ink">{stats.topRegion ? stats.topRegion.name : '—'}</p>
@@ -249,12 +270,20 @@ function Moment({ title, big, sub }) {
   );
 }
 
-function Stat({ value, label, big }) {
-  return (
-    <div className="glass rounded-3xl p-4">
+function Stat({ value, label, big, onClick }) {
+  const body = (
+    <>
       <p className={`font-black text-accent ${big ? 'text-4xl' : 'text-3xl'}`}>{value}</p>
       <p className="text-xs font-semibold text-ink-dim">{label}</p>
-    </div>
+    </>
   );
+  if (onClick) {
+    return (
+      <button onClick={onClick} className="glass rounded-3xl p-4 text-left transition-transform active:scale-95">
+        {body}
+      </button>
+    );
+  }
+  return <div className="glass rounded-3xl p-4">{body}</div>;
 }
 

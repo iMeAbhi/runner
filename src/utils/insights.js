@@ -66,10 +66,13 @@ export function countedLayovers(trip) {
  * with whatever coordinates resolve. Layover segments always count toward
  * distance regardless of the visit toggle.
  */
-export function tripDistanceKm(trip) {
+export function tripDistanceKm(trip, homeLocation = '') {
   const explicit = Number(trip.Distance_KM);
   if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
-  const stops = [trip.Origin_City, ...layoverList(trip), trip.City].map((c) =>
+  // Legacy/parsed rows may lack an origin — fall back to HOME_LOCATION so the
+  // leg still measures something instead of collapsing to 0 km.
+  const origin = trip.Origin_City || homeLocation;
+  const stops = [origin, ...layoverList(trip), trip.City].map((c) =>
     c ? coordsForPlace(c) : null
   );
   let total = 0;
@@ -79,13 +82,13 @@ export function tripDistanceKm(trip) {
   return total;
 }
 
-/** Air / Rail / Ground distance totals (km) across a trip set. */
-export function distanceTotals(trips) {
+/** Air / Rail / Road distance totals (km) across a trip set. */
+export function distanceTotals(trips, homeLocation = '') {
   let air = 0;
   let rail = 0;
   let ground = 0;
   for (const t of trips) {
-    const km = tripDistanceKm(t);
+    const km = tripDistanceKm(t, homeLocation);
     const mode = classifyTransport(t.Transport_Mode);
     if (mode === 'flight') air += km;
     else if (mode === 'train') rail += km;
@@ -126,6 +129,7 @@ export function computeStats(trips) {
   // tally them separately rather than lumping into one "States/Countries".
   const indianRegions = new Set();
   const foreignCountries = new Set();
+  const foreignOrig = {}; // lowercased key → original-cased label for listing
   const modeCounts = {};
   let flights = 0;
   let trains = 0;
@@ -143,7 +147,11 @@ export function computeStats(trips) {
         (regionCount[t.State_Country.trim()] || 0) + 1;
       const region = matchRegion(`${t.State_Country} ${t.City || ''}`);
       if (region) indianRegions.add(region);
-      else foreignCountries.add(t.State_Country.trim().toLowerCase());
+      else {
+        const key = t.State_Country.trim().toLowerCase();
+        foreignCountries.add(key);
+        foreignOrig[key] = t.State_Country.trim();
+      }
     }
     // Toggle-ON layovers are full destinations: count their city + any Indian region.
     for (const lay of countedLayovers(t)) {
@@ -186,6 +194,14 @@ export function computeStats(trips) {
       : null,
     modeCounts,
     totalDays: trips.reduce((a, t) => a + tripDays(t), 0),
+    // Lists for the Insights drill-down modals (match the counts above).
+    cityCounts: Object.entries(cityCount)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count),
+    statesList: [...indianRegions].sort(),
+    countriesList: (indianRegions.size > 0 ? ['India'] : []).concat(
+      [...foreignCountries].map((k) => foreignOrig[k]).sort()
+    ),
   };
 }
 
