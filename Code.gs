@@ -429,7 +429,9 @@ function parseUploadedTicket(body) {
   }
   if (!body || !body.base64) return { error: 'No file data received' };
 
-  var model = getConfigValue('GEMINI_MODEL') || 'gemini-1.5-flash';
+  // gemini-1.5-flash is retired for new API keys; default to a current model.
+  // Override with a GEMINI_MODEL row in the Config tab if needed.
+  var model = getConfigValue('GEMINI_MODEL') || 'gemini-2.0-flash';
   var prompt =
     'You parse travel tickets. From this ticket/boarding-pass/screenshot, extract the journey. ' +
     'Return ONLY a JSON object (no markdown, no backticks, no commentary) with EXACTLY these keys: ' +
@@ -456,7 +458,10 @@ function parseUploadedTicket(body) {
     muteHttpExceptions: true,
   });
   if (resp.getResponseCode() !== 200) {
-    return { error: 'Gemini error ' + resp.getResponseCode() + ': ' + resp.getContentText().slice(0, 180) };
+    var hint = resp.getResponseCode() === 404
+      ? ' — set a GEMINI_MODEL row in Config (e.g. gemini-2.0-flash or gemini-2.5-flash).'
+      : '';
+    return { error: 'Gemini error ' + resp.getResponseCode() + ': ' + resp.getContentText().slice(0, 160) + hint };
   }
 
   var text;
@@ -605,8 +610,101 @@ function syncTripsFromCalendar(body) {
 
   for (var n = 0; n < rows.length; n++) saveTrip(rows[n]);
 
+  // Clean up history: collapse any previously-imported calendar rows that belong
+  // to the same trip (e.g. an old separate flight row + hotel row).
+  var merged = remergeCalendarRows();
+
   setConfigValue('CAL_LAST_SYNC', Utilities.formatDate(now, tz, "yyyy-MM-dd'T'HH:mm:ss"));
-  return { imported: rows.length, firstSync: firstSync, scannedFrom: Utilities.formatDate(start, tz, 'yyyy-MM-dd') };
+  return {
+    imported: rows.length,
+    merged: merged,
+    firstSync: firstSync,
+    scannedFrom: Utilities.formatDate(start, tz, 'yyyy-MM-dd'),
+  };
+}
+
+/**
+ * Re-cluster existing calendar-synced rows (those carrying a Google_Event_ID) by
+ * date proximity and collapse same-trip duplicates created by earlier, brittler
+ * imports. Only touches calendar rows — manually-logged trips are never altered.
+ * Returns the number of duplicate rows removed.
+ */
+function remergeCalendarRows() {
+  var sheet = getSheet(TRIPS_TAB, TRIP_HEADERS);
+  var data = sheet.getDataRange().getValues();
+  var H = data[0];
+  var col = {};
+  ['ID', 'City', 'Start_Date', 'End_Date', 'Transport_Mode', 'Accommodation', 'Google_Event_ID'].forEach(function (k) {
+    col[k] = H.indexOf(k);
+  });
+  if (col.Google_Event_ID < 0) return 0;
+
+  // Gather calendar rows (keep the full row array so we can preserve other fields).
+  var cal = [];
+  for (var r = 1; r < data.length; r++) {
+    if (!String(data[r][col.Google_Event_ID] || '').trim()) continue;
+    var sd = String(data[r][col.Start_Date] || '');
+    if (!sd) continue;
+    cal.push({ row: data[r], start: sd, end: String(data[r][col.End_Date] || sd) });
+  }
+  if (cal.length < 2) return 0;
+  cal.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+
+  // Cluster: a row joins the running cluster if it starts within 2 days of the
+  // cluster's latest end (the same 48h cushion used at import time).
+  var DAY = 864e5;
+  var clusters = [];
+  var cur = null;
+  for (var i = 0; i < cal.length; i++) {
+    var ts = new Date(cal[i].start).getTime();
+    if (cur && ts <= cur.endMs + 2 * DAY) {
+      cur.rows.push(cal[i]);
+      cur.endMs = Math.max(cur.endMs, new Date(cal[i].end).getTime());
+    } else {
+      cur = { rows: [cal[i]], endMs: new Date(cal[i].end).getTime() };
+      clusters.push(cur);
+    }
+  }
+
+  var removed = 0;
+  for (var c = 0; c < clusters.length; c++) {
+    var group = clusters[c].rows;
+    if (group.length < 2) continue;
+
+    // Keeper = a row with a Transport_Mode (the leg → real city), else the first.
+    var keeper = group.filter(function (g) { return String(g.row[col.Transport_Mode] || ''); })[0] || group[0];
+
+    var minStart = group[0].start;
+    var maxEnd = group[0].end;
+    var ids = [];
+    var accs = [];
+    for (var j = 0; j < group.length; j++) {
+      if (group[j].start < minStart) minStart = group[j].start;
+      if (group[j].end > maxEnd) maxEnd = group[j].end;
+      String(group[j].row[col.Google_Event_ID]).split(',').forEach(function (g) { if (g.trim()) ids.push(g.trim()); });
+      var a = String(group[j].row[col.Accommodation] || '').replace(/^\[CAL\]\s*/, '').trim();
+      if (a && a !== 'Google Calendar') accs.push(a);
+    }
+
+    // Rebuild the keeper from its FULL row (preserves State_Country, Operator, etc.),
+    // then override the merged fields.
+    var trip = {};
+    for (var k = 0; k < H.length; k++) trip[H[k]] = keeper.row[k];
+    trip.Start_Date = minStart;
+    trip.End_Date = maxEnd;
+    trip.Accommodation = '[CAL] ' + (accs.join(', ') || 'Google Calendar');
+    trip.Google_Event_ID = ids.join(',');
+    saveTrip(trip);
+
+    // Delete the redundant rows.
+    for (var m = 0; m < group.length; m++) {
+      if (group[m] !== keeper) {
+        deleteTrip(String(group[m].row[col.ID]));
+        removed++;
+      }
+    }
+  }
+  return removed;
 }
 
 /** Classify a calendar event as 'transport' | 'lodging' | 'other' by its title. */
