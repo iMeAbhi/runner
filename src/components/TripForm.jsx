@@ -63,7 +63,13 @@ export default function TripForm({ initial, onClose }) {
         setForm((f) => ({ ...f, ...mapParsedToForm(first) }));
         notify(`Parsed ${results.filter((r) => r && !r.error).length}/${picked.length} ticket(s)`, 'ok');
       } else {
-        notify(results[0]?.error || 'Could not read the ticket', 'warn');
+        const msg = results[0]?.error || 'Could not read the ticket';
+        notify(
+          /off|gemini|not configured|unknown action/i.test(msg)
+            ? 'Ticket import is off — add a GEMINI_API_KEY row in your sheet’s Config tab to turn it on.'
+            : msg,
+          'error'
+        );
       }
     } catch (err) {
       notify(err.message, 'error');

@@ -489,13 +489,25 @@ function parseUploadedTicket(body) {
  *    (with a 2-day overlap buffer).
  *  • Dedupe: each imported row stores its source Google_Event_ID(s); events whose
  *    id is already present are skipped instantly.
- *  • 48-hour merge: a transport leg (flight/train/…) absorbs any lodging/onward leg
- *    to the SAME city starting within 48h — Start_Date = the leg's departure,
- *    End_Date = the latest checkout. Both event ids are recorded on the row.
+ *  • 48-hour merge: events are clustered with a sliding 48h look-ahead, so a
+ *    flight + its hotel (+ onward legs) to one place collapse into a single trip.
+ *    Start_Date = earliest event, End_Date = latest checkout, City = the transport
+ *    leg's destination, hotel names → Accommodation. All event ids stored for dedupe.
  *
  * First run will prompt for Calendar authorization (re-run setup() or just tap the
  * button and approve). Nothing leaves the user's Google account.
  */
+/**
+ * Run this ONCE from the Apps Script editor (Run ▸ authorizeCalendar) and approve
+ * the prompt to grant the Calendar permission the web app needs. No data is written
+ * — it just reads the calendar's name to trigger the OAuth consent screen. After
+ * approving, the Timeline "📅 Calendar" button works.
+ */
+function authorizeCalendar() {
+  var cal = CalendarApp.getDefaultCalendar();
+  return 'Authorized ✓ — default calendar: ' + (cal ? cal.getName() : '(none found)');
+}
+
 function syncTripsFromCalendar(body) {
   var cal = CalendarApp.getDefaultCalendar();
   if (!cal) return { error: 'No default Google Calendar available' };
@@ -524,43 +536,71 @@ function syncTripsFromCalendar(body) {
   var end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
 
   var events = cal.getEvents(start, end);
-  var legs = [];
-  var stays = [];
+  // Collect classified travel events, sorted chronologically.
+  var items = [];
   for (var i = 0; i < events.length; i++) {
-    if (seen[events[i].getId()]) continue;
-    var kind = classifyCalEvent(events[i]);
-    if (kind === 'transport') legs.push(events[i]);
-    else if (kind === 'lodging') stays.push(events[i]);
+    var ev = events[i];
+    if (seen[ev.getId()]) continue;
+    var kind = classifyCalEvent(ev);
+    if (kind !== 'transport' && kind !== 'lodging') continue;
+    items.push({
+      id: ev.getId(),
+      kind: kind,
+      start: ev.getStartTime(),
+      end: ev.getEndTime(),
+      title: ev.getTitle() || '',
+      city: extractCity(ev),
+      mode: kind === 'transport' ? calTransportMode(ev) : '',
+    });
   }
+  items.sort(function (a, b) { return a.start - b.start; });
 
-  var rows = [];
-  var usedStay = {};
-
-  // Each transport leg becomes a trip, merging a same-city stay within 48h.
-  for (var j = 0; j < legs.length; j++) {
-    var leg = legs[j];
-    var city = extractCity(leg);
-    var legStart = leg.getStartTime();
-    var tripEnd = leg.getEndTime();
-    var windowEnd = new Date(legStart.getTime() + 48 * 3600 * 1000);
-    var ids = [leg.getId()];
-    for (var k = 0; k < stays.length; k++) {
-      var stay = stays[k];
-      if (usedStay[stay.getId()]) continue;
-      if (stay.getStartTime() >= legStart && stay.getStartTime() <= windowEnd && cityMatches(stay, city)) {
-        if (stay.getEndTime() > tripEnd) tripEnd = stay.getEndTime(); // checkout = End_Date
-        usedStay[stay.getId()] = true;
-        ids.push(stay.getId());
-      }
+  // Cluster with a 48h sliding look-ahead so a flight + its hotel (+ onward legs)
+  // to the same place collapse into ONE trip instead of separate rows. Each event
+  // joins the current cluster if it starts within 48h of the previous event.
+  var WINDOW = 48 * 3600 * 1000;
+  var clusters = [];
+  var cur = null;
+  for (var c = 0; c < items.length; c++) {
+    var it = items[c];
+    if (cur && it.start.getTime() <= cur.windowEnd) {
+      cur.items.push(it);
+      if (it.end.getTime() > cur.end.getTime()) cur.end = it.end;
+      cur.windowEnd = it.start.getTime() + WINDOW;
+    } else {
+      cur = { items: [it], start: it.start, end: it.end, windowEnd: it.start.getTime() + WINDOW };
+      clusters.push(cur);
     }
-    rows.push(buildCalRow(leg, city, legStart, tripEnd, ids, tz));
   }
 
-  // Unmatched lodging → standalone stay trips (so hotel-only trips still appear).
-  for (var m = 0; m < stays.length; m++) {
-    if (usedStay[stays[m].getId()]) continue;
-    var s = stays[m];
-    rows.push(buildCalRow(s, extractCity(s), s.getStartTime(), s.getEndTime(), [s.getId()], tz));
+  // One trip per cluster: City from the transport leg's destination (a hotel's
+  // own name never becomes the City); hotel titles go into Accommodation; every
+  // source event id is recorded so nothing re-imports next time.
+  var rows = [];
+  for (var q = 0; q < clusters.length; q++) {
+    var cl = clusters[q];
+    var leg = null;
+    var hotels = [];
+    var ids = [];
+    for (var x = 0; x < cl.items.length; x++) {
+      ids.push(cl.items[x].id);
+      if (!leg && cl.items[x].kind === 'transport') leg = cl.items[x];
+      if (cl.items[x].kind === 'lodging') hotels.push(cl.items[x].title);
+    }
+    var primary = leg || cl.items[0];
+    rows.push({
+      ID: 'cal_' + primary.id,
+      City: (leg && leg.city) || primary.city || 'Trip',
+      State_Country: '',
+      Origin_City: '',
+      Start_Date: Utilities.formatDate(cl.start, tz, 'yyyy-MM-dd'),
+      End_Date: Utilities.formatDate(cl.end, tz, 'yyyy-MM-dd'),
+      Transport_Mode: leg ? leg.mode : '',
+      Operator_Name: '',
+      Accommodation: '[CAL] ' + (hotels.filter(Boolean).join(', ') || 'Google Calendar'),
+      Layover_Count_As_Visit: 'FALSE',
+      Google_Event_ID: ids.join(','),
+    });
   }
 
   for (var n = 0; n < rows.length; n++) saveTrip(rows[n]);
@@ -581,21 +621,24 @@ function classifyCalEvent(ev) {
   return 'other';
 }
 
-/** Best-effort destination city: "… to <City>", else the event location, else title. */
+/**
+ * Best-effort city. Prefers "… to <City>" in the title (transport legs), else the
+ * city token inside a location/address. Addresses list the city near the end
+ * ("Hotel, Street, Mumbai, Maharashtra, India"), so we pick the 3rd-from-last
+ * part (before state + country), not the street at the front.
+ */
 function extractCity(ev) {
   var title = ev.getTitle() || '';
   var m = title.match(/\bto\s+([A-Za-z][A-Za-z .'\-]+)/);
   if (m) return m[1].trim().replace(/[,.]+$/, '');
   var loc = ev.getLocation() || '';
-  if (loc) return loc.split(',')[0].trim();
+  if (loc) {
+    var parts = loc.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (parts.length >= 3) return parts[parts.length - 3];
+    if (parts.length === 2) return parts[1];
+    if (parts.length === 1) return parts[0];
+  }
   return title.trim();
-}
-
-/** Does a lodging event belong to `city`? (title or location mentions it). */
-function cityMatches(stay, city) {
-  if (!city) return false;
-  var hay = ((stay.getTitle() || '') + ' ' + (stay.getLocation() || '')).toLowerCase();
-  return hay.indexOf(city.toLowerCase()) !== -1;
 }
 
 /** Map a transport event title to a Transport_Mode. */
@@ -607,19 +650,3 @@ function calTransportMode(ev) {
   return 'Flight';
 }
 
-/** Build a [CAL]-tagged trip row from an event + merge metadata. */
-function buildCalRow(ev, city, startTime, endTime, eventIds, tz) {
-  var trip = {};
-  trip.ID = 'cal_' + ev.getId();
-  trip.City = city || ev.getTitle() || 'Trip';
-  trip.State_Country = ''; // left blank; the app autofills on edit
-  trip.Origin_City = '';
-  trip.Start_Date = Utilities.formatDate(startTime, tz, 'yyyy-MM-dd');
-  trip.End_Date = Utilities.formatDate(endTime, tz, 'yyyy-MM-dd');
-  trip.Transport_Mode = classifyCalEvent(ev) === 'transport' ? calTransportMode(ev) : '';
-  trip.Operator_Name = '';
-  trip.Accommodation = '[CAL] imported from Google Calendar';
-  trip.Layover_Count_As_Visit = 'FALSE';
-  trip.Google_Event_ID = (eventIds || [ev.getId()]).join(',');
-  return trip;
-}
