@@ -597,10 +597,62 @@ function syncTripsFromCalendar(body) {
   // 4) One rich trip row per cluster.
   var rows = [];
   for (var q = 0; q < clusters.length; q++) rows.push(buildClusterTrip(clusters[q], tz));
-  for (var n = 0; n < rows.length; n++) saveTrip(rows[n]);
+
+  // Snapshot existing rows (manual + prior calendar) for cross-source de-duping:
+  // a calendar trip that overlaps an existing same-city trip is absorbed into it
+  // rather than added as a duplicate.
+  var H = data[0];
+  var ci = { ID: H.indexOf('ID'), City: H.indexOf('City'), S: H.indexOf('Start_Date'), E: H.indexOf('End_Date') };
+  var existing = [];
+  for (var er = 1; er < data.length; er++) {
+    var ec = String(data[er][ci.City] || '').trim();
+    var es = String(data[er][ci.S] || '');
+    if (!ec || !es) continue;
+    var obj = {};
+    for (var h = 0; h < H.length; h++) obj[H[h]] = data[er][h];
+    existing.push({ cityLC: ec.toLowerCase(), start: es, end: String(data[er][ci.E] || es), obj: obj });
+  }
+
+  var imported = 0;
+  var absorbed = 0;
+  for (var n = 0; n < rows.length; n++) {
+    var t = rows[n];
+    var tc = String(t.City || '').toLowerCase();
+    var match = null;
+    for (var x = 0; x < existing.length && tc; x++) {
+      var e = existing[x];
+      var cityHit = e.cityLC === tc || e.cityLC.indexOf(tc) >= 0 || tc.indexOf(e.cityLC) >= 0;
+      // date ranges intersect
+      if (cityHit && e.start <= t.End_Date && e.end >= t.Start_Date) { match = e; break; }
+    }
+    if (match) {
+      var m = match.obj;
+      var gids = String(m.Google_Event_ID || '').split(',').concat(String(t.Google_Event_ID).split(','))
+        .map(function (s) { return s.trim(); }).filter(Boolean);
+      var u = {}, dedup = [];
+      gids.forEach(function (g) { if (!u[g]) { u[g] = 1; dedup.push(g); } });
+      m.Google_Event_ID = dedup.join(',');
+      // Fill only blanks — never clobber your manual data / photos / dates.
+      if (!String(m.Origin_City || '').trim()) m.Origin_City = t.Origin_City;
+      if (!String(m.Operator_Name || '').trim()) m.Operator_Name = t.Operator_Name;
+      if (!String(m.Layovers || '').trim()) m.Layovers = t.Layovers;
+      if (!String(m.Transport_Mode || '').trim()) m.Transport_Mode = t.Transport_Mode;
+      saveTrip(m);
+      absorbed++;
+    } else {
+      saveTrip(t);
+      existing.push({ cityLC: tc, start: t.Start_Date, end: t.End_Date, obj: t });
+      imported++;
+    }
+  }
 
   setConfigValue('CAL_LAST_SYNC', Utilities.formatDate(now, tz, "yyyy-MM-dd'T'HH:mm:ss"));
-  return { imported: rows.length, firstSync: firstSync, scannedFrom: Utilities.formatDate(start, tz, 'yyyy-MM-dd') };
+  return {
+    imported: imported,
+    absorbed: absorbed,
+    firstSync: firstSync,
+    scannedFrom: Utilities.formatDate(start, tz, 'yyyy-MM-dd'),
+  };
 }
 
 /** Assemble a trip row from a cluster of logical legs + stays. */
