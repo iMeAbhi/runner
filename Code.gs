@@ -245,6 +245,8 @@ function doPost(e) {
         return json(parseUploadedTicket(body));
       case 'syncCalendar':
         return json(syncTripsFromCalendar(body));
+      case 'resyncCalendar':
+        return json(resyncCalendar(body));
       default:
         return json({ error: 'Unknown action: ' + body.action });
     }
@@ -524,8 +526,7 @@ function syncTripsFromCalendar(body) {
   var idCol = data[0].indexOf('Google_Event_ID');
   var seen = {};
   for (var r = 1; r < data.length; r++) {
-    var cell = idCol >= 0 ? String(data[r][idCol] || '') : '';
-    cell.split(',').forEach(function (id) {
+    String(idCol >= 0 ? data[r][idCol] || '' : '').split(',').forEach(function (id) {
       var t = id.trim();
       if (t) seen[t] = true;
     });
@@ -537,214 +538,207 @@ function syncTripsFromCalendar(body) {
   var firstSync = data.length < 2 || !lastSync;
   var start = firstSync
     ? new Date(now.getFullYear() - 4, now.getMonth(), now.getDate())
-    : new Date(new Date(lastSync).getTime() - 2 * 864e5); // last run − 2 days
-  var end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
+    : new Date(new Date(lastSync).getTime() - 2 * 864e5);
+  var end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 14);
 
   var events = cal.getEvents(start, end);
-  // Collect classified travel events, sorted chronologically.
-  var items = [];
+
+  // 1) Classify and COLLAPSE "(Day x/y)" series + duplicate copies. Events sharing
+  //    the same base title + location are one logical journey/stay spanning all
+  //    their day-parts (so an overnight flight or a 4-night hotel is a single leg).
+  var groups = {};
   for (var i = 0; i < events.length; i++) {
     var ev = events[i];
     if (seen[ev.getId()]) continue;
-    var kind = classifyCalEvent(ev);
-    if (kind !== 'transport' && kind !== 'lodging') continue;
-    items.push({
-      id: ev.getId(),
-      kind: kind,
-      start: ev.getStartTime(),
-      end: ev.getEndTime(),
-      title: ev.getTitle() || '',
-      city: extractCity(ev),
-      mode: kind === 'transport' ? calTransportMode(ev) : '',
-    });
+    var title = ev.getTitle() || '';
+    var kind = calKind(title);
+    if (!kind) continue; // not travel (e.g. a football match) — ignore
+    var loc = ev.getLocation() || '';
+    var key = kind + '|' + calBaseTitle(title) + '|' + loc;
+    var g = groups[key];
+    if (!g) {
+      g = groups[key] = {
+        kind: kind,
+        mode: kind === 'transport' ? calMode(title) : '',
+        dest: kind === 'transport' ? calDest(title) : calStayCity(title, loc),
+        origin: kind === 'transport' ? calOrigin(loc) : '',
+        operator: kind === 'transport' ? calOperator(title) : '',
+        name: kind === 'lodging' ? calStayName(title) : '',
+        start: ev.getStartTime(),
+        end: ev.getEndTime(),
+        ids: [],
+      };
+    }
+    if (ev.getStartTime() < g.start) g.start = ev.getStartTime();
+    if (ev.getEndTime() > g.end) g.end = ev.getEndTime();
+    g.ids.push(ev.getId());
   }
-  items.sort(function (a, b) { return a.start - b.start; });
 
-  // Cluster with a 48h sliding look-ahead so a flight + its hotel (+ onward legs)
-  // to the same place collapse into ONE trip instead of separate rows. Each event
-  // joins the current cluster if it starts within 48h of the previous event.
+  // 2) Sort logical events chronologically.
+  var legsAndStays = Object.keys(groups).map(function (k) { return groups[k]; });
+  legsAndStays.sort(function (a, b) { return a.start - b.start; });
+
+  // 3) Cluster within a 48h sliding window → one trip per cluster.
   var WINDOW = 48 * 3600 * 1000;
   var clusters = [];
   var cur = null;
-  for (var c = 0; c < items.length; c++) {
-    var it = items[c];
-    if (cur && it.start.getTime() <= cur.windowEnd) {
-      cur.items.push(it);
-      if (it.end.getTime() > cur.end.getTime()) cur.end = it.end;
-      cur.windowEnd = it.start.getTime() + WINDOW;
+  for (var c = 0; c < legsAndStays.length; c++) {
+    var e = legsAndStays[c];
+    if (cur && e.start.getTime() <= cur.windowEnd) {
+      cur.events.push(e);
+      if (e.end.getTime() > cur.end.getTime()) cur.end = e.end;
+      cur.windowEnd = e.start.getTime() + WINDOW;
     } else {
-      cur = { items: [it], start: it.start, end: it.end, windowEnd: it.start.getTime() + WINDOW };
+      cur = { events: [e], start: e.start, end: e.end, windowEnd: e.start.getTime() + WINDOW };
       clusters.push(cur);
     }
   }
 
-  // One trip per cluster: City from the transport leg's destination (a hotel's
-  // own name never becomes the City); hotel titles go into Accommodation; every
-  // source event id is recorded so nothing re-imports next time.
+  // 4) One rich trip row per cluster.
   var rows = [];
-  for (var q = 0; q < clusters.length; q++) {
-    var cl = clusters[q];
-    var leg = null;
-    var hotels = [];
-    var ids = [];
-    for (var x = 0; x < cl.items.length; x++) {
-      ids.push(cl.items[x].id);
-      if (!leg && cl.items[x].kind === 'transport') leg = cl.items[x];
-      if (cl.items[x].kind === 'lodging') hotels.push(cl.items[x].title);
-    }
-    var primary = leg || cl.items[0];
-    rows.push({
-      ID: 'cal_' + primary.id,
-      City: (leg && leg.city) || primary.city || 'Trip',
-      State_Country: '',
-      Origin_City: '',
-      Start_Date: Utilities.formatDate(cl.start, tz, 'yyyy-MM-dd'),
-      End_Date: Utilities.formatDate(cl.end, tz, 'yyyy-MM-dd'),
-      Transport_Mode: leg ? leg.mode : '',
-      Operator_Name: '',
-      Accommodation: '[CAL] ' + (hotels.filter(Boolean).join(', ') || 'Google Calendar'),
-      Layover_Count_As_Visit: 'FALSE',
-      Google_Event_ID: ids.join(','),
-    });
-  }
-
+  for (var q = 0; q < clusters.length; q++) rows.push(buildClusterTrip(clusters[q], tz));
   for (var n = 0; n < rows.length; n++) saveTrip(rows[n]);
 
-  // Clean up history: collapse any previously-imported calendar rows that belong
-  // to the same trip (e.g. an old separate flight row + hotel row).
-  var merged = remergeCalendarRows();
-
   setConfigValue('CAL_LAST_SYNC', Utilities.formatDate(now, tz, "yyyy-MM-dd'T'HH:mm:ss"));
+  return { imported: rows.length, firstSync: firstSync, scannedFrom: Utilities.formatDate(start, tz, 'yyyy-MM-dd') };
+}
+
+/** Assemble a trip row from a cluster of logical legs + stays. */
+function buildClusterTrip(cl, tz) {
+  var legs = [], stays = [], ids = [];
+  for (var i = 0; i < cl.events.length; i++) {
+    var e = cl.events[i];
+    ids = ids.concat(e.ids);
+    if (e.kind === 'transport') legs.push(e);
+    else if (e.kind === 'lodging') stays.push(e);
+  }
+  var firstLeg = legs[0] || null;
+  var lastLeg = legs.length ? legs[legs.length - 1] : null;
+  var origin = firstLeg ? firstLeg.origin : '';
+
+  // Destination: where you stayed, else the final leg's destination. For a round
+  // trip with no stay (you flew out and back), the destination is the outbound city.
+  var city = (stays.length && stays[0].dest) || (lastLeg && lastLeg.dest) || (cl.events[0] && cl.events[0].dest) || 'Trip';
+  if (!stays.length && firstLeg && origin && city && city.toLowerCase() === origin.toLowerCase()) {
+    city = firstLeg.dest;
+  }
+
+  // Layovers: intermediate transport destinations that aren't the origin or final city.
+  var layovers = [];
+  for (var j = 0; j < legs.length; j++) {
+    var d = legs[j].dest;
+    if (d && d.toLowerCase() !== (city || '').toLowerCase() && d.toLowerCase() !== (origin || '').toLowerCase() && layovers.indexOf(d) === -1) {
+      layovers.push(d);
+    }
+  }
+
+  var hotels = stays.map(function (s) { return s.name; }).filter(Boolean);
+  var anchorId = firstLeg ? firstLeg.ids[0] : cl.events[0].ids[0];
   return {
-    imported: rows.length,
-    merged: merged,
-    firstSync: firstSync,
-    scannedFrom: Utilities.formatDate(start, tz, 'yyyy-MM-dd'),
+    ID: 'cal_' + anchorId,
+    City: city,
+    State_Country: '',
+    Origin_City: origin,
+    Start_Date: Utilities.formatDate(cl.start, tz, 'yyyy-MM-dd'),
+    End_Date: Utilities.formatDate(cl.end, tz, 'yyyy-MM-dd'),
+    Transport_Mode: firstLeg ? firstLeg.mode : '',
+    Operator_Name: firstLeg ? firstLeg.operator : '',
+    Distance_KM: '',
+    Layovers: layovers.join(', '),
+    Layover_Count_As_Visit: 'FALSE',
+    Accommodation: '[CAL]' + (hotels.length ? ' ' + hotels.join(', ') : ''),
+    Google_Event_ID: ids.join(','),
   };
 }
 
-/**
- * Re-cluster existing calendar-synced rows (those carrying a Google_Event_ID) by
- * date proximity and collapse same-trip duplicates created by earlier, brittler
- * imports. Only touches calendar rows — manually-logged trips are never altered.
- * Returns the number of duplicate rows removed.
- */
-function remergeCalendarRows() {
+/** Delete every calendar-imported row and reset the sync cursor. Returns the count. */
+function clearCalendarTrips() {
   var sheet = getSheet(TRIPS_TAB, TRIP_HEADERS);
   var data = sheet.getDataRange().getValues();
-  var H = data[0];
-  var col = {};
-  ['ID', 'City', 'Start_Date', 'End_Date', 'Transport_Mode', 'Accommodation', 'Google_Event_ID'].forEach(function (k) {
-    col[k] = H.indexOf(k);
-  });
-  if (col.Google_Event_ID < 0) return 0;
-
-  // Gather calendar rows (keep the full row array so we can preserve other fields).
-  var cal = [];
+  var idIdx = data[0].indexOf('ID');
+  var gidIdx = data[0].indexOf('Google_Event_ID');
+  if (gidIdx < 0) return 0;
+  var ids = [];
   for (var r = 1; r < data.length; r++) {
-    if (!String(data[r][col.Google_Event_ID] || '').trim()) continue;
-    var sd = String(data[r][col.Start_Date] || '');
-    if (!sd) continue;
-    cal.push({ row: data[r], start: sd, end: String(data[r][col.End_Date] || sd) });
+    if (String(data[r][gidIdx] || '').trim()) ids.push(String(data[r][idIdx]));
   }
-  if (cal.length < 2) return 0;
-  cal.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
-
-  // Cluster: a row joins the running cluster if it starts within 2 days of the
-  // cluster's latest end (the same 48h cushion used at import time).
-  var DAY = 864e5;
-  var clusters = [];
-  var cur = null;
-  for (var i = 0; i < cal.length; i++) {
-    var ts = new Date(cal[i].start).getTime();
-    if (cur && ts <= cur.endMs + 2 * DAY) {
-      cur.rows.push(cal[i]);
-      cur.endMs = Math.max(cur.endMs, new Date(cal[i].end).getTime());
-    } else {
-      cur = { rows: [cal[i]], endMs: new Date(cal[i].end).getTime() };
-      clusters.push(cur);
-    }
-  }
-
-  var removed = 0;
-  for (var c = 0; c < clusters.length; c++) {
-    var group = clusters[c].rows;
-    if (group.length < 2) continue;
-
-    // Keeper = a row with a Transport_Mode (the leg → real city), else the first.
-    var keeper = group.filter(function (g) { return String(g.row[col.Transport_Mode] || ''); })[0] || group[0];
-
-    var minStart = group[0].start;
-    var maxEnd = group[0].end;
-    var ids = [];
-    var accs = [];
-    for (var j = 0; j < group.length; j++) {
-      if (group[j].start < minStart) minStart = group[j].start;
-      if (group[j].end > maxEnd) maxEnd = group[j].end;
-      String(group[j].row[col.Google_Event_ID]).split(',').forEach(function (g) { if (g.trim()) ids.push(g.trim()); });
-      var a = String(group[j].row[col.Accommodation] || '').replace(/^\[CAL\]\s*/, '').trim();
-      if (a && a !== 'Google Calendar') accs.push(a);
-    }
-
-    // Rebuild the keeper from its FULL row (preserves State_Country, Operator, etc.),
-    // then override the merged fields.
-    var trip = {};
-    for (var k = 0; k < H.length; k++) trip[H[k]] = keeper.row[k];
-    trip.Start_Date = minStart;
-    trip.End_Date = maxEnd;
-    trip.Accommodation = '[CAL] ' + (accs.join(', ') || 'Google Calendar');
-    trip.Google_Event_ID = ids.join(',');
-    saveTrip(trip);
-
-    // Delete the redundant rows.
-    for (var m = 0; m < group.length; m++) {
-      if (group[m] !== keeper) {
-        deleteTrip(String(group[m].row[col.ID]));
-        removed++;
-      }
-    }
-  }
-  return removed;
+  for (var i = 0; i < ids.length; i++) deleteTrip(ids[i]);
+  setConfigValue('CAL_LAST_SYNC', '');
+  return ids.length;
 }
 
-/** Classify a calendar event as 'transport' | 'lodging' | 'other' by its title. */
-function classifyCalEvent(ev) {
-  var t = ((ev.getTitle() || '') + ' ' + (ev.getLocation() || '')).toLowerCase();
-  if (/\b(flight|fly|airport|airlines?|indigo|vistara|air india|spicejet|akasa|emirates|train|rail|express|vande bharat|shatabdi|rajdhani|bus|volvo|coach|road trip|drive to)\b/.test(t)) {
-    return 'transport';
-  }
-  if (/\b(hotel|resort|reservation|stay|inn|lodge|airbnb|villa|homestay|check[- ]?in|check[- ]?out|booking)\b/.test(t)) {
-    return 'lodging';
-  }
-  return 'other';
+/** Wipe all calendar imports, then run a fresh 4-year sync with the current logic. */
+function resyncCalendar(body) {
+  var removed = clearCalendarTrips();
+  var res = syncTripsFromCalendar(body);
+  res.removed = removed;
+  return res;
 }
 
-/**
- * Best-effort city. Prefers "… to <City>" in the title (transport legs), else the
- * city token inside a location/address. Addresses list the city near the end
- * ("Hotel, Street, Mumbai, Maharashtra, India"), so we pick the 3rd-from-last
- * part (before state + country), not the street at the front.
- */
-function extractCity(ev) {
-  var title = ev.getTitle() || '';
-  var m = title.match(/\bto\s+([A-Za-z][A-Za-z .'\-]+)/);
-  if (m) return m[1].trim().replace(/[,.]+$/, '');
-  var loc = ev.getLocation() || '';
-  if (loc) {
-    var parts = loc.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-    if (parts.length >= 3) return parts[parts.length - 3];
-    if (parts.length === 2) return parts[1];
-    if (parts.length === 1) return parts[0];
-  }
-  return title.trim();
+// ── Calendar parsing helpers (tuned to "Flight/Train/Bus/Stay" event titles) ──
+
+/** 'transport' | 'lodging' | '' (ignore) from the event title. */
+function calKind(title) {
+  var t = String(title).toLowerCase();
+  if (/^\s*(flight|train|bus|drive|cab|taxi|road trip)\b/.test(t) || /\b(flight|train|bus)\s+to\b/.test(t)) return 'transport';
+  if (/^\s*stay\b|\bstay at\b|\bhotel\b|\bcheck[- ]?in\b|\bcheck[- ]?out\b|\breservation\b/.test(t)) return 'lodging';
+  return '';
 }
 
-/** Map a transport event title to a Transport_Mode. */
-function calTransportMode(ev) {
-  var t = (ev.getTitle() || '').toLowerCase();
-  if (/train|rail|express|vande bharat|shatabdi|rajdhani/.test(t)) return 'Train';
-  if (/bus|volvo|coach/.test(t)) return 'Bus';
-  if (/road trip|drive|car|cab|taxi/.test(t)) return 'Car';
+/** Drop a trailing "(Day 1/2)" so day-parts of one event group together. */
+function calBaseTitle(title) {
+  return String(title).replace(/\s*\(day\s*\d+\s*\/\s*\d+\)\s*/i, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Transport mode from the title prefix. */
+function calMode(title) {
+  var t = String(title).toLowerCase();
+  if (/train/.test(t)) return 'Train';
+  if (/bus|coach|volvo/.test(t)) return 'Bus';
+  if (/drive|cab|taxi|road trip|car/.test(t)) return 'Car';
   return 'Flight';
+}
+
+/** Destination from "… to <City> (CODE)" → cleaned city. */
+function calDest(title) {
+  var m = String(title).match(/\bto\s+(.+?)(?:\s*\(|$)/i);
+  return cleanPlace(m ? m[1] : title);
+}
+
+/** Origin city from the location field ("Kolkata CCU", "Jntu, Hyderabad", address). */
+function calOrigin(loc) {
+  if (!loc) return '';
+  var parts = String(loc).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  var pick = parts.length >= 3 ? parts[parts.length - 3] : parts[parts.length - 1];
+  return cleanPlace(pick);
+}
+
+/** Hotel name = the title minus "Stay at " and any day-part. */
+function calStayName(title) {
+  return calBaseTitle(title).replace(/^stay at\s*/i, '').trim();
+}
+
+/** City for a stay: a trailing ", City" in the name, else the location's city. */
+function calStayCity(title, loc) {
+  var name = calStayName(title);
+  var m = name.match(/,\s*([A-Za-z][A-Za-z .'\-]+)$/);
+  if (m) return cleanPlace(m[1]);
+  return calOrigin(loc);
+}
+
+/** Strip trailing airport/station codes ("(SRC)", " CCU") and title-case ALL-CAPS. */
+function cleanPlace(s) {
+  s = String(s || '').replace(/\s*\([A-Z0-9]+\)\s*$/, '').replace(/\s+[A-Z]{3}$/, '').replace(/[,.]+$/, '').trim();
+  if (s && s === s.toUpperCase() && /[A-Z]/.test(s)) {
+    s = s.toLowerCase().replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
+  }
+  return s;
+}
+
+/** Airline name from a flight code "(6E 6154)". */
+function calOperator(title) {
+  var m = String(title).match(/\(([0-9A-Z]{2})\s?\d{2,4}\)/);
+  var map = { '6E': 'IndiGo', 'AI': 'Air India', 'IX': 'Air India Express', 'UK': 'Vistara', 'SG': 'SpiceJet', 'QP': 'Akasa Air', 'G8': 'Go First', '9I': 'Alliance Air' };
+  return m ? (map[m[1]] || '') : '';
 }
 

@@ -75,6 +75,10 @@ export const parseTicket = (baseUrl, { base64, mime, filename }, token) =>
 export const syncCalendar = (baseUrl, token) =>
   post(baseUrl, { action: 'syncCalendar' }, token);
 
+/** Wipe all calendar imports and re-import fresh. Returns { removed, imported }. */
+export const resyncCalendar = (baseUrl, token) =>
+  post(baseUrl, { action: 'resyncCalendar' }, token);
+
 /** Upsert a trip row (no media). Returns { trip }. */
 export const saveTrip = (baseUrl, trip, token) =>
   post(baseUrl, { action: 'saveTrip', trip }, token);

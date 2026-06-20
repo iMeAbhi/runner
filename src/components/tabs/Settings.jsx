@@ -10,9 +10,15 @@ const THEMES = [
 ];
 
 export default function Settings() {
-  const { settings, updateSettings, refreshFromSheet, verifyConnection, exportBackup, notify } = useApp();
+  const { settings, updateSettings, refreshFromSheet, verifyConnection, resyncCalendar, exportBackup, notify } = useApp();
   const [holidayDraft, setHolidayDraft] = useState(settings.holidayText);
   const parsedCount = parseHolidayText(holidayDraft).length;
+
+  const onResyncCalendar = () => {
+    if (window.confirm('Remove ALL calendar-imported trips and re-import them fresh from your Google Calendar? Manually-logged trips are not affected.')) {
+      resyncCalendar();
+    }
+  };
 
   const setLeave = (cat, field) => (e) => {
     const val = Math.max(0, Number(e.target.value) || 0);
@@ -212,6 +218,12 @@ export default function Settings() {
         <button onClick={exportBackup} className="w-full rounded-3xl py-2.5 text-sm font-bold text-ink glass">
           Export backup (JSON)
         </button>
+        <button onClick={onResyncCalendar} className="w-full rounded-3xl py-2.5 text-sm font-bold text-ink glass">
+          ↺ Reset &amp; re-import calendar
+        </button>
+        <span className="text-[10px] text-ink-dim">
+          Deletes every calendar-imported trip and re-imports them fresh (4 years back) with the latest logic. Manual trips are untouched.
+        </span>
       </Section>
 
       <p className="pt-2 text-center text-[11px] text-ink-dim">Travel Log & Leave Optimizer · offline-first PWA</p>
